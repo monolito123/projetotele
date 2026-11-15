@@ -87,6 +87,7 @@ async function fetchCandidates(item, candidates, { settings, signal, onProgress 
         }).then((r) => ({ blob: r.blob, ext: r.ext }));
         if (c.kind === 'hls') return await hls();
         const r = await fetchBlob(mapUrl(c.url), { signal, onProgress });
+        if (!r.blob.size) throw new ResolveError(L('errEmptyFile')); // e.g. a cobalt tunnel whose source refused
         const sn = await sniff(r.blob);
         if (sn?.ext === 'm3u8') return await hls(); // playlist served without a .m3u8 name
         if (sn?.ext === 'html' || (!sn && /^text\/html/.test(r.type))) throw new ResolveError(L('errHtmlInsteadOfFile'));
@@ -193,12 +194,17 @@ export async function fetchItem(item, { settings, signal, onProgress, variant } 
     if (item.retry) {
       onProgress?.({ stage: 'retry' });
       try {
-        const res = await resolve(item.retry.url, { settings, signal, skip: item.retry.skip, noGeneric: true });
+        const res = await resolve(item.retry.url, {
+          settings, signal, skip: item.retry.skip, cobaltExclude: item.retry.cobaltExclude || [], noGeneric: true,
+        });
         if (res.items.length === 1) return await fetchItem(res.items[0], { settings, signal, onProgress });
       } catch (e2) {
         if (isUserAbort(e2) || signal?.aborted) throw e2;
+        if (e2 instanceof ManualDownload) throw e2;
       }
     }
+    // Free community servers can be busy or blocked for a given video: say so plainly.
+    if (item.cobaltPublic && !(e instanceof ManualDownload)) throw new ResolveError(L('errPublicFailed'), { needsCobalt: true });
     throw e;
   }
   return postProcess(item, got, { settings, signal, onProgress });

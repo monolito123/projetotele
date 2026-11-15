@@ -20,7 +20,7 @@ export const MT_LANGS = [
 
 const RTL = new Set(['ar', 'fa', 'he', 'ur']);
 const HAND = new Set(LANGS.map(([c]) => c));
-const DICT_VERSION = 2;
+const DICT_VERSION = 3;
 
 let lang = 'en';
 let dict = EN;

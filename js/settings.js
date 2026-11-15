@@ -10,6 +10,7 @@ export const DEFAULTS = Object.freeze({
   autoStart: true,
   useFfmpeg: true, // merge audio+video / remux / extract audio in the browser (ffmpeg.wasm)
   translateTitles: true, // on-device translation of post titles (Chrome Translator API)
+  publicCobalt: true, // fall back to the free community cobalt servers below
   // "https://your-cobalt.example.com/" or "https://your-cobalt.example.com/ | API_KEY"
   cobalt: '',
   piped: [
@@ -55,12 +56,32 @@ export function resetSettings() {
 const lines = (s) => String(s || '').split(/\n+/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
 const normBase = (u) => u.replace(/\/+$/, '');
 
-export function cobaltInstances(s = current) {
+/**
+ * Free community cobalt servers that answer without a captcha/JWT and allow
+ * browser (CORS) requests. Checked 2026-11: YouTube + TikTok work on the first
+ * two; cobaltapi.cjs.nz is the one reported working for Facebook.
+ */
+export const PUBLIC_COBALT = [
+  { url: 'https://rue-cobalt.xenon.zone/', key: '', public: true },
+  { url: 'https://co.otomir23.me/', key: '', public: true },
+  { url: 'https://cobaltapi.cjs.nz/', key: '', public: true, prefer: ['facebook'] },
+];
+
+/** The user's own cobalt servers only. */
+export function ownCobaltInstances(s = current) {
   return lines(s.cobalt).map((l) => {
     const [url, ...rest] = l.split('|');
     const key = rest.join('|').trim();
     return { url: normBase(url.trim()) + '/', key };
   }).filter((i) => /^https?:\/\//.test(i.url));
+}
+
+/** Own servers first, then (unless disabled) the public pool, ordered for the platform. */
+export function cobaltInstances(s = current, platformId = '') {
+  const own = ownCobaltInstances(s);
+  if (s.publicCobalt === false) return own;
+  const pool = [...PUBLIC_COBALT].sort((a, b) => (b.prefer?.includes(platformId) ? 1 : 0) - (a.prefer?.includes(platformId) ? 1 : 0));
+  return [...own, ...pool.filter((p) => !own.some((o) => o.url === p.url))];
 }
 
 export const pipedInstances = (s = current) => lines(s.piped).map(normBase).filter((u) => /^https?:\/\//.test(u));

@@ -57,7 +57,7 @@
 }
 
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; overflow-x: hidden; overflow-x: clip; }
 body {
   margin: 0;
   background: var(--bg);
@@ -78,7 +78,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   max-width: 1040px; margin: 0 auto; padding: 18px 16px;
 }
 .brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: var(--fg); font-weight: 750; font-size: 20px; letter-spacing: -.02em; }
-.top-actions { display: flex; gap: 8px; align-items: center; }
+.top-actions { display: flex; gap: 8px; align-items: center; min-width: 0; flex: 0 1 auto; }
 .icon-btn, .pill-btn {
   display: inline-grid; place-items: center; height: 38px; min-width: 38px; padding: 0 10px;
   border-radius: 12px; border: 1px solid var(--line); background: var(--bg-elev); cursor: pointer; color: var(--fg);
@@ -90,7 +90,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
   border-radius: 12px; border: 1px solid var(--line); background: var(--bg-elev); color: var(--fg); cursor: pointer;
 }
 .lang-pick:hover, .lang-pick:focus-within { border-color: var(--accent); }
-.lang-pick select { border: 0; background: transparent; padding: 0 2px; font-weight: 600; font-size: 14px; max-width: 150px; cursor: pointer; outline: none; }
+.lang-pick { min-width: 0; }
+.lang-pick select { border: 0; background: transparent; padding: 0 2px; font-weight: 600; font-size: 14px; max-width: 150px; min-width: 0; width: 100%; text-overflow: ellipsis; cursor: pointer; outline: none; }
 .lang-pick select option, .lang-pick select optgroup { color: var(--fg); background: var(--bg-elev); }
 .linkish { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .linkish:disabled { opacity: .5; cursor: progress; }
@@ -293,4 +294,13 @@ details .field + .field { margin-top: 12px; }
   .lang-pick select { max-width: 185px; }
   .lang-pick { padding-inline: 8px 4px; }
 
+}
+
+/* Very narrow phones (≤ 400px, e.g. 360px Android): keep the header inside the screen. */
+@media (max-width: 400px) {
+  .topbar { gap: 8px; }
+  .top-actions { gap: 6px; }
+  .icon-btn { min-width: 36px; height: 36px; padding: 0 8px; }
+  .lang-pick { height: 36px; padding-inline: 8px 4px; gap: 4px; }
+  .lang-pick select { max-width: 132px; font-size: 13.5px; }
 }

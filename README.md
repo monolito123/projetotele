@@ -59,16 +59,20 @@ Each link goes through a chain of resolvers. The first one that works wins. If n
 | **Reddit** | cobalt → public JSON + ffmpeg merge | ⚠️ the public JSON is blocked on some networks |
 | **Direct files** (`.mp4 .webm .mov .mp3 .jpg…`) | fetched directly | ✅ |
 | **HLS streams** (`.m3u8`) | built-in downloader: quality, AES-128, fMP4, separate audio | ✅ |
-| **YouTube** (videos, Shorts, playlists) | cobalt → Piped → Invidious | 🔧 needs cobalt (public Piped/Invidious are mostly blocked by YouTube) |
-| **Instagram, Facebook, Vimeo, Dailymotion, Twitch clips, SoundCloud, Tumblr, Snapchat, Bilibili, Loom, Newgrounds, OK.ru, VK, Rutube, Medal, Xiaohongshu** | cobalt | 🔧 needs cobalt |
+| **YouTube** (videos, Shorts, playlists) | cobalt (free public servers, or yours) → Piped → Invidious | ✅ most videos; some (e.g. region-locked music videos) are blocked for the public servers |
+| **Instagram, Facebook, Vimeo, Dailymotion, Twitch clips, SoundCloud, Tumblr, Snapchat, Bilibili, Loom, Newgrounds, OK.ru, VK, Rutube, Medal, Xiaohongshu** | cobalt (free public servers, or yours) | ⚠️ best-effort on the public servers; reliable with your own |
 | **Threads, Telegram, Kick, Rumble, LinkedIn, Kwai, Coub, any other site** | page scan (og:video, `<video>`, JSON-LD, raw media URLs, embedded players) | 🔧 usually needs the CORS proxy |
 | Netflix, Prime Video, Disney+, Spotify… | refused (DRM) | ❌ |
+
+### Free public servers (no setup)
+
+Out of the box, platforms that need a server (YouTube, Instagram, Facebook…) go through a small pool of **free community-run cobalt servers** that accept requests from any website. They're listed in `PUBLIC_COBALT` in [`js/settings.js`](js/settings.js) and can be switched off in ⚙ Settings. If one server fails (busy, blocked, or sends an empty file), the next one is tried automatically. These servers are run by volunteers. They can be slow, change, or be blocked by a platform for a given video. Your own server (below) is the reliable option.
 
 ### Why some platforms need a server
 
 A web page can only read another site if that site allows it (CORS). Instagram, YouTube, Facebook and others don't. That's why there are two optional, self-hosted helpers in [`self-host/`](self-host/):
 
-1. **cobalt** ([imputnet/cobalt](https://github.com/imputnet/cobalt), open source). Run it with [`self-host/docker-compose.yml`](self-host/docker-compose.yml), then paste its URL (optionally `URL | API_KEY`) in **⚙ Settings → cobalt servers**. This unlocks every 🔧 platform above. Public cobalt instances require their own captcha, so they can't be called from other sites.
+1. **cobalt** ([imputnet/cobalt](https://github.com/imputnet/cobalt), open source). Run it with [`self-host/docker-compose.yml`](self-host/docker-compose.yml), then paste its URL (optionally `URL | API_KEY`) in **⚙ Settings → cobalt servers**. Your servers are always tried before the public pool. (Most public instances, including the official one, require their own captcha and can't be called from other sites. The pool only lists those that don't.)
 2. **CORS proxy**: a ~40-line Cloudflare Worker, [`self-host/cors-proxy-worker.js`](self-host/cors-proxy-worker.js), restricted to your own site's origin. It's used for page scanning and for CDNs that block the browser.
 
 ## Publishing

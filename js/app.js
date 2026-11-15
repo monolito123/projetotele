@@ -320,6 +320,7 @@ async function downloadSingle(job, item, variant) {
   const { signal } = job.ctrl;
   job.manual = null;
   job.file = null;
+  job.needsSettings = false;
   setActions(job, () => [cancelBtn(job)]);
   setStatus(job, [L('statusDownloading')]);
   setBar(job, 'indet');
@@ -354,7 +355,8 @@ async function downloadSingle(job, item, variant) {
       setStatus(job, [L('statusCancelled')], 'warn');
     } else {
       setBar(job, 'hide');
-      setStatus(job, [L('statusFailed'), ': ', errText(e)], 'err');
+      job.needsSettings = !!e.needsCobalt;
+      setStatus(job, e.needsCobalt ? [errText(e)] : [L('statusFailed'), ': ', errText(e)], 'err');
     }
   }
   setActions(job, () => (job.result.items.length === 1 ? singleActions(job) : multiActions(job)));
@@ -373,7 +375,8 @@ function singleActions(job) {
   if (job.file && canShareFiles() && navigator.canShare({ files: [job.file] })) {
     acts.push(btn(`⤴ ${t('shareSave')}`, () => navigator.share({ files: [job.file], title: job.file.name }).catch(() => {}), 'primary'));
   }
-  acts.push(btn(job.done ? t('again') : t('download'), () => downloadSingle(job, item), job.done || job.manual ? 'ghost' : 'primary'));
+  if (job.needsSettings) acts.push(btn(`⚙ ${t('settings')}`, openSettings, 'primary'));
+  acts.push(btn(job.done ? t('again') : job.needsSettings ? t('retry') : t('download'), () => downloadSingle(job, item), job.done || job.manual || job.needsSettings ? 'ghost' : 'primary'));
   const vars = item.variants || [];
   if (vars.length > 1) vars.slice(0, 8).forEach((v) => acts.push(btn(render(v.label) || '?', () => downloadSingle(job, item, v))));
   (res.extras || []).forEach((x) => acts.push(btn(`♪ ${t('audioExtra')}${x.ext ? ` (${x.ext.toUpperCase()})` : ''}`, () => downloadSingle(job, x))));
@@ -627,6 +630,7 @@ function fillSettingsForm(s) {
   field('autoStart').checked = s.autoStart;
   field('useFfmpeg').checked = s.useFfmpeg !== false;
   field('translateTitles').checked = s.translateTitles !== false;
+  field('publicCobalt').checked = s.publicCobalt !== false;
   field('cobalt').value = s.cobalt;
   field('corsProxy').value = s.corsProxy;
   field('piped').value = s.piped;
@@ -762,6 +766,7 @@ async function init() {
       autoStart: field('autoStart').checked,
       useFfmpeg: field('useFfmpeg').checked,
       translateTitles: field('translateTitles').checked,
+      publicCobalt: field('publicCobalt').checked,
       cobalt: field('cobalt').value.trim(),
       corsProxy: field('corsProxy').value.trim(),
       piped: field('piped').value.trim(),

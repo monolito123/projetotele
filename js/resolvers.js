@@ -14,7 +14,7 @@ import {
 } from './util.js';
 import { inspectHls } from './m3u8.js';
 import { detectPlatform, GENERIC } from './platforms.js';
-import { cobaltInstances, pipedInstances, invidiousInstances } from './settings.js';
+import { cobaltInstances, ownCobaltInstances, pipedInstances, invidiousInstances } from './settings.js';
 import { ffmpegSupported } from './ffmpeg.js';
 
 export const LABELS = {
@@ -683,13 +683,19 @@ async function cobaltRequest(inst, link, s, signal) {
   }
 }
 
-R.cobalt = async ({ url, settings, signal }) => {
+R.cobalt = async ({ url, settings, signal, platform, cobaltExclude = [] }) => {
   let last;
-  for (const inst of cobaltInstances(settings)) {
-    try { return await cobaltRequest(inst, url.href, settings, signal); } catch (e) {
+  for (const inst of cobaltInstances(settings, platform?.id).filter((i) => !cobaltExclude.includes(i.url))) {
+    try {
+      const res = await cobaltRequest(inst, url.href, settings, signal);
+      // Remember which server produced the files, so a failed download can move on to the next one.
+      res.items.forEach((it) => { it.cobaltInst = inst.url; it.cobaltPublic = !!inst.public; });
+      return res;
+    } catch (e) {
       if (isUserAbort(e)) throw e;
       last = e;
-      if (e.unsupported) break;
+      // A user's own server saying "unsupported" is final; public servers differ, so keep trying.
+      if (e.unsupported && !inst.public) break;
     }
   }
   throw last || new ResolveError(L('errNoCobalt'));
@@ -940,7 +946,7 @@ function splitAudio(res, settings) {
  * Resolve a URL into media items.
  * options.only: run just this resolver; options.skip: resolvers to leave out (used for retries).
  */
-export async function resolve(raw, { settings, signal, onStatus, depth = 0, only = null, skip = [], noGeneric = false }) {
+export async function resolve(raw, { settings, signal, onStatus, depth = 0, only = null, skip = [], noGeneric = false, cobaltExclude = [] }) {
   let url;
   try {
     url = new URL(String(raw).trim());
@@ -956,19 +962,31 @@ export async function resolve(raw, { settings, signal, onStatus, depth = 0, only
   if (!noGeneric) chain.push('generic');
   chain = only ? [only] : [...new Set(chain)].filter((n) => !skip.includes(n));
 
-  const hasCobalt = cobaltInstances(settings).length > 0;
+  const cobaltLeft = () => cobaltInstances(settings, platform.id).filter((i) => !cobaltExclude.includes(i.url)).length;
+  const hasCobalt = cobaltLeft() > 0;
   const attempts = [];
   for (const name of chain) {
     if (name === 'cobalt' && !hasCobalt) { attempts.push({ via: LABELS.cobalt, error: L('errNoCobalt'), skipped: true }); continue; }
     onStatus?.(L('statusTrying', { via: LABELS[name] }), { platform });
     try {
-      let res = await R[name]({ url, raw, settings, signal, platform });
+      let res = await R[name]({ url, raw, settings, signal, platform, cobaltExclude });
       if (res.redirect && depth < 3 && res.redirect !== url.href) return await resolve(res.redirect, { settings, signal, onStatus, depth: depth + 1 });
       if (res.items?.length) {
         res = splitAudio(res, settings);
         // If this single file later fails to download, the rest of the chain gets a turn.
-        const rest = chain.slice(chain.indexOf(name) + 1).filter((n) => n !== 'generic' && (n !== 'cobalt' || hasCobalt));
-        if (res.items.length === 1 && rest.length) res.items[0].retry = { url: url.href, skip: [...skip, ...chain.slice(0, chain.indexOf(name) + 1)] };
+        const at = chain.indexOf(name);
+        const rest = chain.slice(at + 1).filter((n) => n !== 'generic' && (n !== 'cobalt' || hasCobalt));
+        if (res.items.length === 1) {
+          const it = res.items[0];
+          if (name === 'cobalt') {
+            // Next try: the other cobalt servers, then whatever followed cobalt in the chain.
+            const excl = [...cobaltExclude, it.cobaltInst];
+            const more = cobaltInstances(settings, platform.id).some((i) => !excl.includes(i.url));
+            if (more || rest.length) it.retry = { url: url.href, skip: [...skip, ...chain.slice(0, at)], cobaltExclude: excl };
+          } else if (rest.length) {
+            it.retry = { url: url.href, skip: [...skip, ...chain.slice(0, at + 1)], cobaltExclude };
+          }
+        }
         return { ...res, platform, via: LABELS[name], sourceUrl: url.href };
       }
       attempts.push({ via: LABELS[name], error: L('errNoMedia') });
@@ -978,6 +996,9 @@ export async function resolve(raw, { settings, signal, onStatus, depth = 0, only
       if (e?.fatal) break;
     }
   }
-  const needsCobalt = !hasCobalt && platform.resolvers.includes('cobalt');
-  throw new ResolveError(needsCobalt ? L('errNeedCobalt', { name: platform.name }) : L('errAllFailed'), { attempts, needsCobalt, platform });
+  // Platforms that only cobalt can handle: point to the settings (own server / public pool).
+  const cobaltPlatform = platform.resolvers.includes('cobalt') && !ownCobaltInstances(settings).length;
+  const usedPublic = cobaltPlatform && settings.publicCobalt !== false;
+  const msg = !cobaltPlatform ? L('errAllFailed') : usedPublic ? L('errPublicFailed') : L('errNeedCobalt', { name: platform.name });
+  throw new ResolveError(msg, { attempts, needsCobalt: cobaltPlatform, platform });
 }
