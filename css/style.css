@@ -101,11 +101,11 @@ main { max-width: 1040px; margin: 0 auto; padding: 0 16px 48px; }
 .hero { text-align: center; padding: 40px 0 8px; }
 .hero h1 {
   margin: 0 auto 12px; max-width: 760px;
-  font-size: clamp(30px, 6vw, 54px); line-height: 1.05; letter-spacing: -.035em; font-weight: 800;
+  font-size: clamp(30px, 6vw, 54px); font-size: clamp(30px, 6cqi, 54px); line-height: 1.05; letter-spacing: -.035em; font-weight: 800;
   background: linear-gradient(100deg, var(--fg) 30%, var(--accent) 70%, var(--accent-2));
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.sub { margin: 0 auto 28px; max-width: 640px; color: var(--muted); font-size: clamp(15px, 2.2vw, 18px); }
+.sub { margin: 0 auto 28px; max-width: 640px; color: var(--muted); font-size: clamp(15px, 2.2vw, 18px); font-size: clamp(15px, 2.2cqi, 18px); }
 
 .paste-box {
   display: flex; align-items: center; gap: 10px;
@@ -225,12 +225,12 @@ select:focus, input[type="text"]:focus, .field textarea:focus { outline: 2px sol
 /* ---------- modals ---------- */
 .modal {
   border: 0; padding: 0; background: transparent; color: var(--fg);
-  width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 24px);
+  width: min(560px, calc(var(--vw, 100vw) - 24px)); max-height: calc(var(--vh, 100dvh) - 24px);
 }
-.modal.wide { width: min(980px, calc(100vw - 24px)); }
+.modal.wide { width: min(980px, calc(var(--vw, 100vw) - 24px)); }
 .modal::backdrop { background: rgba(6, 8, 14, .58); backdrop-filter: blur(3px); }
 .modal-inner {
-  display: flex; flex-direction: column; max-height: calc(100dvh - 24px);
+  display: flex; flex-direction: column; max-height: calc(var(--vh, 100dvh) - 24px);
   background: var(--bg-elev); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow); overflow: hidden;
 }
 .modal-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; padding: 18px 18px 8px; }
@@ -257,7 +257,7 @@ select:focus, input[type="text"]:focus, .field textarea:focus { outline: 2px sol
 .note { margin: 0 18px 10px; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--fg); font-size: 13px; }
 
 .viewer-media { padding: 0 18px 12px; display: grid; place-items: center; }
-.viewer-media video, .viewer-media img { max-width: 100%; max-height: 60dvh; border-radius: 12px; background: #000; display: block; }
+.viewer-media video, .viewer-media img { max-width: 100%; max-height: calc(var(--vh, 100dvh) * .6); border-radius: 12px; background: #000; display: block; }
 .viewer-media audio { width: 100%; }
 .filename { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
 .settings-body { padding: 6px 18px 16px; overflow: auto; display: grid; gap: 16px; }
@@ -271,14 +271,21 @@ details .field + .field { margin-top: 12px; }
 
 .drop-overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 22%, rgba(0, 0, 0, .55)); color: #fff; font-size: 28px; font-weight: 800; pointer-events: none; }
 .drop-overlay div { padding: 28px 40px; border: 3px dashed #fff; border-radius: 24px; }
-.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 60; background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; box-shadow: var(--shadow); max-width: calc(100vw - 32px); }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 60; background: var(--fg); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; box-shadow: var(--shadow); max-width: calc(var(--vw, 100vw) - 32px); }
 
-/* ---------- small screens ---------- */
-@media (max-width: 440px) {
+/* ---------- small screens ----------
+   Page layout uses container queries on .page, not media queries, so it also
+   adapts when a phone renders the desktop version ("Desktop site" on): a tiny
+   script in index.html then zooms the page to the phone's real width and
+   .page becomes phone-wide again. Dialogs live outside .page, so they use
+   a media query plus the .phone-zoom class set by that script. */
+.page { container: page / inline-size; }
+
+@container page (max-width: 440px) {
   .brand span { display: none; }
 }
 
-@media (max-width: 640px) {
+@container page (max-width: 640px) {
   .hero { padding-top: 20px; }
   .paste-box { flex-wrap: wrap; padding: 10px; border-radius: 18px; }
   .link-ico { display: none; }
@@ -288,19 +295,24 @@ details .field + .field { margin-top: 12px; }
   .job { grid-template-columns: 76px 1fr; gap: 10px; }
   .job .thumb { width: 76px; }
   .steps { grid-template-columns: 1fr; }
-  .row2 { grid-template-columns: 1fr; }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
-  .modal-foot .btn { flex: 1; }
   .lang-pick select { max-width: 185px; }
   .lang-pick { padding-inline: 8px 4px; }
-
 }
 
 /* Very narrow phones (≤ 400px, e.g. 360px Android): keep the header inside the screen. */
-@media (max-width: 400px) {
+@container page (max-width: 400px) {
   .topbar { gap: 8px; }
   .top-actions { gap: 6px; }
   .icon-btn { min-width: 36px; height: 36px; padding: 0 8px; }
   .lang-pick { height: 36px; padding-inline: 8px 4px; gap: 4px; }
   .lang-pick select { max-width: 132px; font-size: 13.5px; }
 }
+
+@media (max-width: 640px) {
+  .row2 { grid-template-columns: 1fr; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+  .modal-foot .btn { flex: 1; }
+}
+.phone-zoom .row2 { grid-template-columns: 1fr; }
+.phone-zoom .grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.phone-zoom .modal-foot .btn { flex: 1; }
