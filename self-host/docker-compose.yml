@@ -1,0 +1,28 @@
+# Your own cobalt API server: unlocks YouTube, Instagram, Facebook, Vimeo, Twitch clips,
+# SoundCloud, Pinterest, Tumblr, Snapchat, Bilibili, VK, OK.ru, Rutube, Dailymotion, Loom…
+#
+#   1. Put this on any VPS with Docker, behind HTTPS (Caddy, nginx, Cloudflare Tunnel…).
+#   2. Change API_URL to the public address of the server.
+#   3. docker compose up -d
+#   4. In getvid → ⚙ Settings → "cobalt servers", paste: https://cobalt.your-domain.com/
+#
+# Docs: https://github.com/imputnet/cobalt/tree/main/docs
+services:
+  cobalt-api:
+    image: ghcr.io/imputnet/cobalt:11
+    init: true
+    read_only: true
+    restart: unless-stopped
+    container_name: cobalt-api
+    ports:
+      - 9000:9000/tcp
+    environment:
+      API_URL: "https://cobalt.your-domain.com/"
+      # CORS is open by default (CORS_WILDCARD=1), which lets getvid call it from the browser.
+      # To keep strangers out, require API keys and paste "URL | KEY" into getvid's settings:
+      # API_AUTH_REQUIRED: 1
+      # API_KEY_URL: "file:///keys.json"
+    # volumes:
+    #   - ./keys.json:/keys.json:ro
+    # YouTube increasingly requires a session token or cookies; see cobalt's docs
+    # (yt-session-generator / COOKIE_PATH) if YouTube links fail.
