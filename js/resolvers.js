@@ -3,16 +3,19 @@
 //
 // Item: { type: video|audio|photo|gif, kind: file|hls|lazy, url, name|filename, ext?, thumb?,
 //         label?, duration?, variants?: [{url, kind, label, p?, ext?}], fallbacks?: [...],
+//         audio?: { url, kind, ext, fallbacks? } separate audio track to merge in (ffmpeg),
 //         attachment?: true when the server sends Content-Disposition: attachment,
+//         final?: true when the file is already exactly what the user asked for (cobalt),
 //         sourceUrl?: (lazy) page URL resolved again at download time }
-import { t } from './i18n.js';
+import { L } from './i18n.js';
 import {
   ResolveError, fetchJson, fetchJsonRaw, withTimeout, mapFetchError, hostOf, isUserAbort,
-  extFromUrl, typeFromExt, isMediaUrl, shortSide, proxify, firstSuccess, extFromMime, sleep,
+  extFromUrl, typeFromExt, isMediaUrl, shortSide, proxify, firstSuccess, extFromMime, sleep, normUrl,
 } from './util.js';
 import { inspectHls } from './m3u8.js';
 import { detectPlatform, GENERIC } from './platforms.js';
 import { cobaltInstances, pipedInstances, invidiousInstances } from './settings.js';
+import { ffmpegSupported } from './ffmpeg.js';
 
 export const LABELS = {
   direct: 'direct file', hls: 'HLS', fxtwitter: 'FxTwitter', vxtwitter: 'vxTwitter', tikwm: 'TikWM',
@@ -20,10 +23,14 @@ export const LABELS = {
   mastodon: 'Mastodon API', peertube: 'PeerTube API', archive: 'Archive.org API', giphy: 'Giphy',
   imgur: 'Imgur', ninegag: '9GAG', dropbox: 'Dropbox', gdrive: 'Google Drive', telegram: 'Telegram',
   piped: 'Piped', invidious: 'Invidious', cobalt: 'cobalt', generic: 'page scan',
+  odysee: 'Odysee API', pinterest: 'Pinterest API', misskey: 'Misskey API', lemmy: 'Lemmy API',
 };
 
-const bad = () => new ResolveError(t('errBadLink'));
-const none = () => new ResolveError(t('errNoMedia'));
+/** Whether separate audio/video can be merged in this browser with the user's settings. */
+export const canMerge = (settings) => settings.useFfmpeg !== false && ffmpegSupported();
+
+const bad = () => new ResolveError(L('errBadLink'));
+const none = () => new ResolveError(L('errNoMedia'));
 const nameFromPath = (u) => {
   try { return decodeURIComponent(new URL(u).pathname.split('/').filter(Boolean).pop() || '') || 'file'; } catch { return 'file'; }
 };
@@ -46,13 +53,12 @@ async function hlsItems(href, { name, thumb, signal, settings }) {
   }
   const item = { type: 'video', kind: 'hls', url: href, name, thumb, duration: info.duration || undefined };
   if (info.variants.length) item.variants = info.variants;
-  const items = [item];
   if (info.audios.length) {
+    // Separate audio rendition: merged with ffmpeg, or offered as its own file (see splitAudio).
     const a = info.audios.find((x) => x.isDefault) || info.audios[0];
-    item.label = t('noAudio');
-    items.push({ type: 'audio', kind: 'hls', url: a.url, name: `${name} (audio)`, label: a.name || a.lang });
+    item.audio = { kind: 'hls', url: a.url, label: a.name || a.lang };
   }
-  return items;
+  return [item];
 }
 
 R.direct = async ({ url, signal, settings }) => {
@@ -84,7 +90,7 @@ R.fxtwitter = async ({ url, signal }) => {
   const id = tweetId(url);
   if (!id) throw bad();
   const { data } = await fetchJsonRaw(`https://api.fxtwitter.com/status/${id}`, { signal });
-  if (!data || data.code !== 200 || !data.tweet) throw new ResolveError(data?.code === 404 ? t('errNotFound') : `FxTwitter: ${data?.message || 'error'}`);
+  if (!data || data.code !== 200 || !data.tweet) throw new ResolveError(data?.code === 404 ? L('errNotFound') : `FxTwitter: ${data?.message || 'error'}`);
   const tw = data.tweet;
   let media = tw.media?.all || [];
   if (!media.length && tw.quote?.media?.all) media = tw.quote.media.all;
@@ -189,7 +195,7 @@ R.bluesky = async ({ url, signal }) => {
   const uri = `at://${did}/app.bsky.feed.post/${m[2]}`;
   const { posts } = await fetchJson(`${BSKY}/app.bsky.feed.getPosts?uris=${encodeURIComponent(uri)}`, { signal });
   const post = posts?.[0];
-  if (!post) throw new ResolveError(t('errNotFound'));
+  if (!post) throw new ResolveError(L('errNotFound'));
 
   const found = [];
   const collect = (e, owner) => {
@@ -253,8 +259,8 @@ R.streamable = async ({ url, signal }) => {
   const code = url.pathname.split('/').filter(Boolean).filter((s) => !['e', 'o', 's', 'm'].includes(s))[0];
   if (!code) throw bad();
   const d = await fetchJson(`https://api.streamable.com/videos/${code}`, { signal });
-  if (d.status !== 2) throw new ResolveError(t('errProcessing'));
-  const fix = (u) => (u?.startsWith('//') ? 'https:' + u : u);
+  if (d.status !== 2) throw new ResolveError(L('errProcessing'));
+  const fix = normUrl;
   const variants = Object.entries(d.files || {})
     .filter(([, f]) => f?.url)
     .map(([k, f]) => ({ url: fix(f.url), kind: 'file', ext: 'mp4', p: shortSide(f.width, f.height), label: f.height ? `${shortSide(f.width, f.height)}p` : k }));
@@ -274,13 +280,13 @@ R.reddit = async ({ url, signal, settings }) => {
   if (host === 'v.redd.it') {
     const id = url.pathname.split('/').filter(Boolean)[0];
     if (!id) throw bad();
-    return { title: `reddit_${id}`, items: await hlsItems(`https://v.redd.it/${id}/HLSPlaylist.m3u8`, { name: `reddit_${id}`, signal, settings }), note: t('redditSplit') };
+    return { title: `reddit_${id}`, items: await hlsItems(`https://v.redd.it/${id}/HLSPlaylist.m3u8`, { name: `reddit_${id}`, signal, settings }) };
   }
   const id = url.pathname.match(/\/comments\/([a-z0-9]+)/i)?.[1] || (host === 'redd.it' ? url.pathname.split('/').filter(Boolean)[0] : null);
   if (!id) throw bad();
   const json = await fetchJson(`https://www.reddit.com/comments/${id}.json?raw_json=1`, { signal });
   let post = json?.[0]?.data?.children?.[0]?.data;
-  if (!post) throw new ResolveError(t('errNotFound'));
+  if (!post) throw new ResolveError(L('errNotFound'));
   if (post.crosspost_parent_list?.length) post = post.crosspost_parent_list[0];
   const base = `reddit_${post.id}`;
   const thumb = post.preview?.images?.[0]?.source?.url || (/^https?:/.test(post.thumbnail || '') ? post.thumbnail : undefined);
@@ -290,17 +296,18 @@ R.reddit = async ({ url, signal, settings }) => {
   if (rv?.fallback_url) {
     const video = rv.fallback_url.split('?')[0];
     const dir = video.slice(0, video.lastIndexOf('/'));
-    const items = [{
+    const item = {
       type: rv.is_gif ? 'gif' : 'video', kind: 'file', url: video, ext: 'mp4', name: base, thumb, duration: rv.duration,
-      label: rv.has_audio === false || rv.is_gif ? undefined : t('noAudio'), fallbacks: rv.hls_url ? [{ kind: 'hls', url: rv.hls_url }] : [],
-    }];
+      fallbacks: rv.hls_url ? [{ kind: 'hls', url: rv.hls_url }] : [],
+    };
     if (rv.has_audio !== false && !rv.is_gif) {
-      items.push({
-        type: 'audio', kind: 'file', url: `${dir}/DASH_AUDIO_128.mp4`, ext: 'm4a', name: `${base}_audio`, thumb,
+      // Reddit keeps the soundtrack in a separate file; it is merged in with ffmpeg.
+      item.audio = {
+        kind: 'file', url: `${dir}/DASH_AUDIO_128.mp4`, ext: 'm4a', optional: true,
         fallbacks: [`${dir}/DASH_AUDIO_64.mp4`, `${dir}/DASH_audio.mp4`, `${dir}/audio`].map((u) => ({ kind: 'file', url: u, ext: 'm4a' })),
-      });
+      };
     }
-    return { title, items, note: items.length > 1 ? t('redditSplit') : undefined };
+    return { title, items: [item] };
   }
   if (post.is_gallery && post.gallery_data?.items) {
     const items = post.gallery_data.items.map((g, i) => {
@@ -402,7 +409,7 @@ R.archive = async ({ url, signal, settings }) => {
   const id = parts[1];
   if (parts[0] === 'download' && parts.length > 2 && isMediaUrl(url.href)) return R.direct({ url, signal, settings });
   const md = await fetchJson(`https://archive.org/metadata/${encodeURIComponent(id)}`, { signal });
-  if (!md.files) throw new ResolveError(t('errNotFound'));
+  if (!md.files) throw new ResolveError(L('errNotFound'));
   const wantAudio = settings.mode === 'audio';
   const groups = new Map();
   for (const f of md.files) {
@@ -520,25 +527,39 @@ const ytAudioExt = (mime) => (/webm/i.test(mime || '') ? 'weba' : 'm4a');
 
 function ytItems({ title, thumb, duration, muxed, videoOnly, audio, hls }, settings) {
   const bestAudio = [...audio].sort((a, b) => (/mp4/.test(b.mime) - /mp4/.test(a.mime)) || b.bitrate - a.bitrate)[0];
-  const audioItem = bestAudio && { type: 'audio', kind: 'file', url: bestAudio.url, ext: ytAudioExt(bestAudio.mime), name: title, thumb, label: t('audioExtra') };
+  const audioItem = bestAudio && { type: 'audio', kind: 'file', url: bestAudio.url, ext: ytAudioExt(bestAudio.mime), name: title, thumb, label: L('audioExtra') };
   if (settings.mode === 'audio' && audioItem) return { items: [audioItem] };
   const toVariants = (arr) => arr
     .map((s) => ({ url: s.url, kind: 'file', ext: /webm/i.test(s.mime) ? 'webm' : 'mp4', p: s.p, bitrate: s.bitrate, label: `${s.p || '?'}p${/webm/i.test(s.mime) ? ' webm' : ''}` }))
     .sort((a, b) => (b.ext === 'mp4') - (a.ext === 'mp4'));
   if (settings.mode === 'mute' && videoOnly.length) {
     const vs = toVariants(videoOnly);
-    return { items: [{ type: 'video', kind: 'file', url: vs[0].url, name: title, thumb, duration, variants: vs }] };
+    return { items: [{ type: 'video', kind: 'file', url: vs[0].url, name: title, thumb, duration, variants: vs, final: true }] };
+  }
+  const extras = audioItem ? [audioItem] : [];
+  const bestMuxed = Math.max(0, ...muxed.map((s) => s.p || 0));
+  const bestAdaptive = Math.max(0, ...videoOnly.map((s) => s.p || 0));
+  // With ffmpeg, high-quality adaptive video + audio beats the 360p/720p muxed streams.
+  if (videoOnly.length && bestAudio && canMerge(settings) && bestAdaptive > bestMuxed) {
+    const vs = toVariants(videoOnly.filter((s) => !/av01/i.test(s.mime || '')));
+    if (vs.length) {
+      return {
+        items: [{ type: 'video', kind: 'file', url: vs[0].url, ext: vs[0].ext, name: title, thumb, duration, variants: vs,
+          audio: { kind: 'file', url: bestAudio.url, ext: ytAudioExt(bestAudio.mime) } }],
+        extras,
+      };
+    }
   }
   if (muxed.length) {
     const vs = toVariants(muxed);
-    return { items: [{ type: 'video', kind: 'file', url: vs[0].url, ext: vs[0].ext, name: title, thumb, duration, variants: vs }], extras: audioItem ? [audioItem] : [] };
+    return { items: [{ type: 'video', kind: 'file', url: vs[0].url, ext: vs[0].ext, name: title, thumb, duration, variants: vs }], extras };
   }
-  if (hls) return { items: [{ type: 'video', kind: 'hls', url: hls, name: title, thumb, duration }] };
+  if (hls) return { items: [{ type: 'video', kind: 'hls', url: hls, name: title, thumb, duration }], extras };
   if (videoOnly.length) {
     const vs = toVariants(videoOnly);
-    const items = [{ type: 'video', kind: 'file', url: vs[0].url, name: title, thumb, duration, variants: vs, label: t('noAudio') }];
-    if (audioItem) items.push(audioItem);
-    return { items };
+    const item = { type: 'video', kind: 'file', url: vs[0].url, name: title, thumb, duration, variants: vs };
+    if (bestAudio) item.audio = { kind: 'file', url: bestAudio.url, ext: ytAudioExt(bestAudio.mime) };
+    return { items: [item], extras };
   }
   throw none();
 }
@@ -605,12 +626,12 @@ R.invidious = async ({ url, settings, signal }) => {
 /* ------------------------------------------------------------------ */
 
 function cobaltError(code = '') {
-  if (/auth\.jwt|turnstile/.test(code)) return t('errCobaltJwt');
-  if (/auth\.(key|not_authenticated|missing)|api_key/.test(code)) return t('errCobaltAuth');
-  if (/rate_exceeded/.test(code)) return t('errCobaltRate');
-  if (/link\.(unsupported|invalid)|service\.(unsupported|disabled)/.test(code)) return t('errCobaltUnsupported');
-  if (/content\.|fetch\.empty|fetch\.fail/.test(code)) return `${t('errNotFound')} (${code})`;
-  return t('errCobaltGeneric', { code });
+  if (/auth\.jwt|turnstile/.test(code)) return L('errCobaltJwt');
+  if (/auth\.(key|not_authenticated|missing)|api_key/.test(code)) return L('errCobaltAuth');
+  if (/rate_exceeded/.test(code)) return L('errCobaltRate');
+  if (/link\.(unsupported|invalid)|service\.(unsupported|disabled)/.test(code)) return L('errCobaltUnsupported');
+  if (/content\.|fetch\.empty|fetch\.fail/.test(code)) return L('errNotFoundCode', { code });
+  return L('errCobaltGeneric', { code });
 }
 
 async function cobaltRequest(inst, link, s, signal) {
@@ -624,7 +645,7 @@ async function cobaltRequest(inst, link, s, signal) {
   let r = await post(body);
   if (r.data?.status === 'error' && /invalid_body/.test(r.data.error?.code || '')) r = await post({ url: link });
   const d = r.data;
-  if (!d) throw new ResolveError(t('errHttp', { status: r.status, host: hostOf(inst.url) }));
+  if (!d) throw new ResolveError(L('errHttp', { status: r.status, host: hostOf(inst.url) }));
 
   const base = stripExt(nameFromPath(link)) || 'media';
   switch (d.status) {
@@ -632,30 +653,33 @@ async function cobaltRequest(inst, link, s, signal) {
       const fn = d.filename || '';
       const ext = (fn.match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase();
       const type = typeFromExt(ext) || (s.mode === 'audio' ? 'audio' : 'video');
-      return { title: stripExt(fn) || link, items: [{ type, kind: 'file', url: d.url, filename: fn || undefined, name: base, ext, attachment: d.status !== 'redirect' }] };
+      return { title: stripExt(fn) || link, items: [{ type, kind: 'file', url: d.url, filename: fn || undefined, name: base, ext, attachment: d.status !== 'redirect', final: true }] };
     }
     case 'picker': {
       const items = (d.picker || []).map((p, i) => ({
-        type: p.type === 'photo' ? 'photo' : p.type === 'gif' ? 'gif' : 'video', kind: 'file', url: p.url, thumb: p.thumb, name: `${base}_${i + 1}`,
+        type: p.type === 'photo' ? 'photo' : p.type === 'gif' ? 'gif' : 'video', kind: 'file', url: p.url, thumb: p.thumb, name: `${base}_${i + 1}`, final: true,
       }));
       if (d.audio) items.push({ type: 'audio', kind: 'file', url: d.audio, filename: d.audioFilename, name: `${base}_audio`, attachment: true });
       return { title: base, items };
     }
     case 'local-processing': {
+      // cobalt 11 hands the final processing step (merge/convert) to the client: we do it with ffmpeg.
       const tunnels = d.tunnel || [];
       const fn = d.output?.filename || base;
-      if (tunnels.length === 1) return { title: stripExt(fn), items: [{ type: s.mode === 'audio' ? 'audio' : 'video', kind: 'file', url: tunnels[0], filename: fn, attachment: true }] };
-      return {
-        title: stripExt(fn), note: t('redditSplit').split('.')[0] + '.',
-        items: tunnels.map((u, i) => ({ type: i === 0 ? 'video' : 'audio', kind: 'file', url: u, name: `${stripExt(fn)}_${i === 0 ? 'video' : 'audio'}`, attachment: true })),
-      };
+      const outExt = (fn.match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase();
+      if (!tunnels.length) throw new ResolveError(L('errCobaltGeneric', { code: 'local-processing' }));
+      const item = { type: d.type === 'audio' ? 'audio' : 'video', kind: 'file', url: tunnels[0], name: stripExt(fn), ext: outExt, final: true };
+      if (d.type === 'merge' && tunnels[1]) item.audio = { kind: 'file', url: tunnels[1] };
+      else if (d.type === 'audio') item.transform = 'audio';
+      else if (d.type === 'mute') item.transform = 'mute';
+      return { title: stripExt(fn), items: [item] };
     }
     case 'error': {
       const code = d.error?.code || 'error';
       throw new ResolveError(cobaltError(code), { unsupported: /unsupported/.test(code), code });
     }
     default:
-      throw new ResolveError(t('errCobaltGeneric', { code: d.status || r.status }));
+      throw new ResolveError(L('errCobaltGeneric', { code: d.status || r.status }));
   }
 }
 
@@ -668,7 +692,7 @@ R.cobalt = async ({ url, settings, signal }) => {
       if (e.unsupported) break;
     }
   }
-  throw last || new ResolveError(t('errNoCobalt'));
+  throw last || new ResolveError(L('errNoCobalt'));
 };
 
 /* ------------------------------------------------------------------ */
@@ -680,11 +704,11 @@ async function fetchPage(u, signal) {
   try {
     const res = await fetch(u, { signal: tm.signal, referrerPolicy: 'no-referrer' });
     const type = (res.headers.get('content-type') || '').toLowerCase();
-    if (/^(video|audio|image)\//.test(type) || /mpegurl/.test(type)) {
+    if (/^(video|audio|image)\//.test(type) || /mpegurl|octet-stream|binary/.test(type)) {
       res.body?.cancel().catch(() => {});
       return { media: type };
     }
-    if (!res.ok) throw new ResolveError(t('errHttp', { status: res.status, host: hostOf(u) }));
+    if (!res.ok) throw new ResolveError(L('errHttp', { status: res.status, host: hostOf(u) }));
     return { html: await res.text() };
   } catch (e) {
     throw mapFetchError(e, u, signal, tm.signal);
@@ -708,11 +732,11 @@ R.generic = async ({ url, settings, signal }) => {
   for (const u of tries) {
     try { page = await fetchPage(u, signal); break; } catch (e) { if (isUserAbort(e)) throw e; lastErr = e; }
   }
-  if (!page) throw lastErr?.net && !px ? new ResolveError(t('errNoProxy')) : lastErr;
+  if (!page) throw lastErr?.net && !px ? new ResolveError(L('errNoProxy')) : lastErr;
 
   if (page.media) {
     if (/mpegurl/.test(page.media)) return R.hls({ url, signal, settings });
-    const ext = extFromMime(page.media);
+    const ext = extFromMime(page.media); // octet-stream: the real type is sniffed after download
     const type = page.media.startsWith('image/') ? (ext === 'gif' ? 'gif' : 'photo') : page.media.startsWith('audio/') ? 'audio' : 'video';
     return { title: nameFromPath(url.href), items: [{ type, kind: 'file', url: url.href, ext, name: stripExt(nameFromPath(url.href)) }] };
   }
@@ -789,47 +813,171 @@ R.telegram = async (ctx) => {
 };
 
 /* ------------------------------------------------------------------ */
+/* Odysee, Pinterest, Misskey-family, Lemmy                            */
+/* ------------------------------------------------------------------ */
+
+R.odysee = async ({ url, signal }) => {
+  const segs = url.pathname.split('/').filter(Boolean).map((x) => decodeURIComponent(x));
+  let lbry;
+  if (segs[0] === '$' && segs[1] === 'embed' && segs[2]) lbry = `lbry://${segs[2]}${segs[3] ? `#${segs[3]}` : ''}`;
+  else if (segs.length && segs[0] !== '$') lbry = `lbry://${segs.slice(0, 2).map((x) => x.replace(':', '#')).join('/')}`;
+  else throw bad();
+  const { data } = await fetchJsonRaw('https://api.na-backend.odysee.com/api/v1/proxy?m=resolve', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+    body: JSON.stringify({ jsonrpc: '2.0', method: 'resolve', params: { urls: [lbry] } }),
+  });
+  let c = data?.result?.[lbry];
+  if (!c || c.error) throw new ResolveError(L('errNotFound'));
+  if (c.value_type === 'repost' && c.reposted_claim) c = c.reposted_claim;
+  const v = c.value || {};
+  const sd = v.source?.sd_hash;
+  if (!sd) throw none();
+  const mime = v.source?.media_type || 'video/mp4';
+  const type = mime.startsWith('audio') ? 'audio' : mime.startsWith('image') ? 'photo' : 'video';
+  const ext = type === 'video' ? 'mp4' : (extFromMime(mime) || 'bin');
+  const title = v.title || c.name;
+  return {
+    title,
+    items: [{ type, kind: 'file', url: `https://player.odycdn.com/v6/streams/${c.claim_id}/${sd.slice(0, 6)}.${ext}`, ext, name: title,
+      thumb: v.thumbnail?.url, duration: v.video?.duration || v.audio?.duration }],
+  };
+};
+
+R.pinterest = async ({ url, signal }) => {
+  const id = url.pathname.match(/\/pin\/(?:[\w-]*--)?(\d{6,})/)?.[1];
+  if (!id) throw bad();
+  const d = await fetchJson(`https://widgets.pinterest.com/v3/pidgets/pins/info/?pin_ids=${id}`, { signal });
+  const pin = d?.data?.[0];
+  if (!pin) throw new ResolveError(L('errNotFound'));
+  const base = `pinterest_${id}`;
+  const largest = (images) => Object.values(images || {}).filter((x) => x?.url).sort((a, b) => (b.width || 0) - (a.width || 0))[0]?.url;
+  const photo = (images, name) => {
+    const big = largest(images);
+    if (!big) return null;
+    const orig = big.replace(/\/\d+x(\d+)?\//, '/originals/');
+    return { type: 'photo', kind: 'file', url: orig, thumb: big, name, fallbacks: orig !== big ? [{ kind: 'file', url: big }] : [] };
+  };
+  const video = (list, name, thumb) => {
+    const all = Object.values(list || {}).filter((x) => x?.url);
+    const mp4 = all.filter((x) => /\.mp4(\?|$)/.test(x.url)).sort((a, b) => (b.width || 0) - (a.width || 0));
+    const hls = all.find((x) => /\.m3u8(\?|$)/.test(x.url));
+    if (mp4.length) {
+      const variants = mp4.map((x) => ({ url: x.url, kind: 'file', ext: 'mp4', p: shortSide(x.width, x.height), label: `${shortSide(x.width, x.height)}p` }));
+      return { type: 'video', kind: 'file', url: mp4[0].url, ext: 'mp4', name, thumb, variants: variants.length > 1 ? variants : undefined, fallbacks: hls ? [{ kind: 'hls', url: hls.url }] : [] };
+    }
+    return hls ? { type: 'video', kind: 'hls', url: hls.url, name, thumb } : null;
+  };
+  const thumb = largest(pin.images);
+  const items = [];
+  const main = video(pin.videos?.video_list, base, thumb);
+  if (main) items.push(main);
+  for (const page of pin.story_pin_data?.pages || []) {
+    for (const b of page.blocks || []) {
+      const name = `${base}_${items.length + 1}`;
+      const it = (b.video && video(b.video.video_list, name, thumb)) || (b.image && photo(b.image.images, name));
+      if (it) items.push(it);
+    }
+  }
+  if (!items.length) { const p = photo(pin.images, base); if (p) items.push(p); }
+  if (!items.length) throw none();
+  return { title: (pin.title || pin.grid_title || pin.description || base).trim().slice(0, 120), items };
+};
+
+R.misskey = async ({ url, signal }) => {
+  const id = url.pathname.match(/^\/notes\/([a-z0-9]+)/i)?.[1];
+  if (!id) throw bad();
+  const n = await fetchJson(`${url.origin}/api/notes/show`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ noteId: id }), signal,
+  });
+  const note = n.files?.length ? n : (n.renote || n);
+  const files = note.files || [];
+  const user = note.user?.username || 'note';
+  const items = files.map((f, i) => ({
+    type: /^image\/gif/.test(f.type) ? 'gif' : /^image\//.test(f.type) ? 'photo' : /^audio\//.test(f.type) ? 'audio' : 'video',
+    kind: 'file', url: f.url, thumb: f.thumbnailUrl, ext: extFromMime(f.type), label: f.comment?.slice(0, 60),
+    name: files.length > 1 ? `${user}_${id}_${i + 1}` : `${user}_${id}`,
+  })).filter((x) => x.url);
+  return { title: (note.text || `${user}_${id}`).slice(0, 120), author: user, items };
+};
+
+R.lemmy = async ({ url, signal }) => {
+  const id = url.pathname.match(/^\/post\/(\d+)/)?.[1];
+  if (!id) throw bad();
+  const d = await fetchJson(`${url.origin}/api/v3/post?id=${id}`, { signal });
+  const p = d.post_view?.post;
+  if (!p) throw new ResolveError(L('errNotFound'));
+  const title = p.name || `lemmy_${id}`;
+  const media = p.embed_video_url || (p.url && isMediaUrl(p.url) ? p.url : null);
+  if (media) {
+    const ext = extFromUrl(media);
+    return { title, items: [{ type: ext === 'm3u8' ? 'video' : (typeFromExt(ext) || 'video'), kind: ext === 'm3u8' ? 'hls' : 'file', url: media, name: title, thumb: p.thumbnail_url }] };
+  }
+  if (p.url && /\/pictrs\//.test(p.url)) return { title, items: [{ type: 'photo', kind: 'file', url: p.url, thumb: p.thumbnail_url, name: title }] };
+  if (p.url) return { redirect: p.url };
+  throw none();
+};
+
+/* ------------------------------------------------------------------ */
 /* Engine                                                              */
 /* ------------------------------------------------------------------ */
 
 const NO_DIRECT_SHORTCUT = new Set(['dropbox', 'gdrive', 'archive', 'imgur']);
 
-export async function resolve(raw, { settings, signal, onStatus, depth = 0, only = null }) {
+/** Without ffmpeg, a separate audio track becomes its own downloadable item. */
+function splitAudio(res, settings) {
+  if (canMerge(settings) || !res.items.some((i) => i.audio)) return res;
+  const items = [];
+  for (const it of res.items) {
+    if (!it.audio) { items.push(it); continue; }
+    const { audio, ...video } = it;
+    items.push({ ...video, label: L('noAudio') });
+    items.push({ type: 'audio', kind: audio.kind, url: audio.url, ext: audio.ext || 'm4a', fallbacks: audio.fallbacks, name: `${it.name || 'media'}_audio`, thumb: it.thumb });
+  }
+  return { ...res, items, note: res.note || L('redditSplit') };
+}
+
+/**
+ * Resolve a URL into media items.
+ * options.only: run just this resolver; options.skip: resolvers to leave out (used for retries).
+ */
+export async function resolve(raw, { settings, signal, onStatus, depth = 0, only = null, skip = [], noGeneric = false }) {
   let url;
   try {
     url = new URL(String(raw).trim());
     if (!/^https?:$/.test(url.protocol)) throw new Error();
   } catch {
-    throw new ResolveError(t('errNoUrl'), { fatal: true });
+    throw new ResolveError(L('errNoUrl'), { fatal: true });
   }
   const platform = detectPlatform(url);
-  if (platform.drm) throw new ResolveError(t('errDrm', { name: platform.name }), { fatal: true, platform });
+  if (platform.drm) throw new ResolveError(L('errDrm', { name: platform.name }), { fatal: true, platform });
 
   let chain = [...platform.resolvers];
   if (isMediaUrl(url.href) && !NO_DIRECT_SHORTCUT.has(platform.id)) chain.unshift('direct');
-  chain.push('generic');
-  chain = only ? [only] : [...new Set(chain)];
+  if (!noGeneric) chain.push('generic');
+  chain = only ? [only] : [...new Set(chain)].filter((n) => !skip.includes(n));
 
   const hasCobalt = cobaltInstances(settings).length > 0;
   const attempts = [];
   for (const name of chain) {
-    if (name === 'cobalt' && !hasCobalt) { attempts.push({ via: LABELS.cobalt, error: t('errNoCobalt'), skipped: true }); continue; }
-    onStatus?.(t('statusTrying', { via: LABELS[name] }), { platform });
+    if (name === 'cobalt' && !hasCobalt) { attempts.push({ via: LABELS.cobalt, error: L('errNoCobalt'), skipped: true }); continue; }
+    onStatus?.(L('statusTrying', { via: LABELS[name] }), { platform });
     try {
-      const res = await R[name]({ url, raw, settings, signal, platform });
+      let res = await R[name]({ url, raw, settings, signal, platform });
       if (res.redirect && depth < 3 && res.redirect !== url.href) return await resolve(res.redirect, { settings, signal, onStatus, depth: depth + 1 });
       if (res.items?.length) {
-        // A single file found natively but blocked by CORS can still be fetched through cobalt later.
-        if (res.items.length === 1 && name !== 'cobalt' && platform.resolvers.includes('cobalt')) res.items[0].cobaltRetry = url.href;
+        res = splitAudio(res, settings);
+        // If this single file later fails to download, the rest of the chain gets a turn.
+        const rest = chain.slice(chain.indexOf(name) + 1).filter((n) => n !== 'generic' && (n !== 'cobalt' || hasCobalt));
+        if (res.items.length === 1 && rest.length) res.items[0].retry = { url: url.href, skip: [...skip, ...chain.slice(0, chain.indexOf(name) + 1)] };
         return { ...res, platform, via: LABELS[name], sourceUrl: url.href };
       }
-      attempts.push({ via: LABELS[name], error: t('errNoMedia') });
+      attempts.push({ via: LABELS[name], error: L('errNoMedia') });
     } catch (e) {
       if (isUserAbort(e)) throw e;
-      attempts.push({ via: LABELS[name], error: e?.message || String(e) });
+      attempts.push({ via: LABELS[name], error: e?.l || e?.message || String(e) });
       if (e?.fatal) break;
     }
   }
   const needsCobalt = !hasCobalt && platform.resolvers.includes('cobalt');
-  throw new ResolveError(needsCobalt ? t('errNeedCobalt', { name: platform.name }) : t('errAllFailed'), { attempts, needsCobalt, platform });
+  throw new ResolveError(needsCobalt ? L('errNeedCobalt', { name: platform.name }) : L('errAllFailed'), { attempts, needsCobalt, platform });
 }

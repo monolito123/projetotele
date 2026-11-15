@@ -1,21 +1,23 @@
-// Turning a resolved Item into a file on disk.
-import { t } from './i18n.js';
+// Turning a resolved Item into a finished file: download (with fallbacks, proxy, retries),
+// then post-process with ffmpeg (merge audio+video, TS→MP4, audio extraction, mute).
+import { L } from './i18n.js';
 import {
-  fetchBlob, pickVariant, sanitizeFilename, extFromMime, extFromUrl, DEFAULT_EXT,
-  filenameFromDisposition, proxify, ResolveError, isUserAbort,
+  fetchBlob, pickVariant, variantFallbacks, sanitizeFilename, extFromMime, extFromUrl, DEFAULT_EXT,
+  filenameFromDisposition, proxify, ResolveError, isUserAbort, sniff, VIDEO_EXT, AUDIO_EXT, normUrl,
 } from './util.js';
 import { downloadHls } from './m3u8.js';
-import { resolve } from './resolvers.js';
-import { cobaltInstances } from './settings.js';
+import { resolve, canMerge } from './resolvers.js';
+import { mergeAV, remuxToMp4, extractAudio, stripAudio } from './ffmpeg.js';
 
 /** Every candidate was blocked by CORS: the user has to open the link themselves. */
-export class ManualDownload extends Error {
-  constructor(url, filename, attachment) {
-    super(t('statusManual'));
+export class ManualDownload extends ResolveError {
+  constructor(url, filename, attachment, type) {
+    super(L('statusManual'));
     this.name = 'ManualDownload';
     this.url = url;
     this.filename = filename;
     this.attachment = attachment;
+    this.type = type;
   }
 }
 
@@ -23,7 +25,7 @@ export function buildFilename(item, ext) {
   const e = ext || item.ext || DEFAULT_EXT[item.type] || 'mp4';
   if (item.filename) {
     const f = sanitizeFilename(item.filename);
-    return /\.[a-z0-9]{2,5}$/i.test(f) ? f : `${f}.${e}`;
+    return /\.[a-z0-9]{2,5}$/i.test(f) ? f.replace(/\.[a-z0-9]{2,5}$/i, `.${e}`) : `${f}.${e}`;
   }
   return `${sanitizeFilename(item.name, item.type || 'video')}.${e}`;
 }
@@ -62,22 +64,17 @@ export async function concretize(item, { settings, signal }) {
   if (item.kind !== 'lazy') return item;
   const res = await resolve(item.sourceUrl, { settings, signal });
   const first = res.items.find((i) => i.kind !== 'lazy');
-  if (!first) throw new ResolveError(t('errNoMedia'));
+  if (!first) throw new ResolveError(L('errNoMedia'));
   return { ...first, name: first.name || item.name, thumb: first.thumb || item.thumb };
 }
 
-/**
- * Download one item into memory → { blob, filename }.
- * Tries the chosen variant, then fallbacks, each directly and then via the CORS proxy.
- * onProgress({ loaded, total }) or ({ done, total, loaded, segments: true }) for HLS.
- */
-export async function fetchItem(item, { settings, signal, onProgress, variant } = {}) {
-  item = await concretize(item, { settings, signal });
-  const chosen = variant || pickVariant(item.variants, settings.quality);
-  const primary = chosen ? { ...chosen } : { url: item.url, kind: item.kind, ext: item.ext };
+/** Try each candidate URL (directly, then through the CORS proxy). → { blob, ext, disposition } */
+async function fetchCandidates(item, candidates, { settings, signal, onProgress }) {
   const seen = new Set();
-  const candidates = [primary, ...(item.fallbacks || [])].filter((c) => c.url && !seen.has(c.url) && seen.add(c.url));
-
+  candidates = candidates
+    .filter((c) => c && c.url)
+    .map((c) => ({ ...c, url: normUrl(c.url) }))
+    .filter((c) => !seen.has(c.url) && seen.add(c.url));
   const errors = [];
   let manual = null;
   for (const c of candidates) {
@@ -85,19 +82,17 @@ export async function fetchItem(item, { settings, signal, onProgress, variant } 
       if (viaProxy && !settings.corsProxy) break;
       const mapUrl = viaProxy ? (u) => proxify(u, settings.corsProxy) : (u) => u;
       try {
-        if (c.kind === 'hls') {
-          const r = await downloadHls(c.url, {
-            quality: settings.quality, signal, mapUrl,
-            onProgress: (p) => onProgress?.({ ...p, segments: true }),
-          });
-          return { blob: r.blob, filename: buildFilename(item, r.ext) };
-        }
+        const hls = () => downloadHls(c.url, {
+          quality: settings.quality, signal, mapUrl, onProgress: (p) => onProgress?.({ ...p, segments: true }),
+        }).then((r) => ({ blob: r.blob, ext: r.ext }));
+        if (c.kind === 'hls') return await hls();
         const r = await fetchBlob(mapUrl(c.url), { signal, onProgress });
-        if (/^text\/html/.test(r.type)) throw new ResolveError(t('errHtmlInsteadOfFile'));
-        if (item.filename) return { blob: r.blob, filename: buildFilename(item) };
-        const ext = extFromMime(r.type) || (c.ext !== 'm3u8' && c.ext) || item.ext || extFromUrl(c.url);
-        const disp = filenameFromDisposition(r.disposition);
-        return { blob: r.blob, filename: !item.name && disp ? sanitizeFilename(disp) : buildFilename(item, ext) };
+        const sn = await sniff(r.blob);
+        if (sn?.ext === 'm3u8') return await hls(); // playlist served without a .m3u8 name
+        if (sn?.ext === 'html' || (!sn && /^text\/html/.test(r.type))) throw new ResolveError(L('errHtmlInsteadOfFile'));
+        const ext = sn?.ext || extFromMime(r.type) || (c.ext !== 'm3u8' && c.ext) || item.ext || extFromUrl(c.url);
+        const blob = sn && r.blob.type !== sn.mime ? new Blob([r.blob], { type: sn.mime }) : r.blob;
+        return { blob, ext, disposition: r.disposition };
       } catch (e) {
         if (isUserAbort(e) || signal?.aborted) throw e;
         errors.push(e);
@@ -106,15 +101,105 @@ export async function fetchItem(item, { settings, signal, onProgress, variant } 
       }
     }
   }
-  if (manual && item.cobaltRetry && cobaltInstances(settings).length) {
-    try {
-      const res = await resolve(item.cobaltRetry, { settings, signal, only: 'cobalt' });
-      if (res.items.length === 1) return await fetchItem(res.items[0], { settings, signal, onProgress });
-    } catch (e) {
-      if (e instanceof ManualDownload) throw e;
-      if (isUserAbort(e) || signal?.aborted) throw e;
+  if (manual) throw new ManualDownload(manual.url, buildFilename(item, manual.ext), !!item.attachment, item.type);
+  throw errors.find((e) => !e.net) || errors[0] || new ResolveError(L('errNoMedia'));
+}
+
+const AUDIO_TARGET = { mp3: 'mp3', ogg: 'ogg', opus: 'opus', wav: 'wav' };
+const isVideoExt = (ext) => VIDEO_EXT.includes(ext);
+const hasSound = (ext) => isVideoExt(ext) || AUDIO_EXT.includes(ext);
+
+/** ffmpeg post-processing. Never loses the download: on failure the original is kept. */
+async function postProcess(item, got, { settings, signal, onProgress }) {
+  let { blob, ext } = got;
+  const extras = [];
+  let warning = null;
+  let type = item.type;
+  const conv = (stage, fmt) => ({
+    signal,
+    onLoad: (p) => onProgress?.({ stage: 'load', ...p }),
+    onProgress: (frac) => onProgress?.({ stage, frac, fmt }),
+  });
+  const useFf = canMerge(settings);
+  try {
+    // 1. Separate audio track → merge it in.
+    if (item.audio && useFf) {
+      let audio = null;
+      try {
+        audio = await fetchCandidates({ ...item, type: 'audio', ext: item.audio.ext || 'm4a', attachment: false },
+          [item.audio, ...(item.audio.fallbacks || [])], { settings, signal, onProgress: (p) => onProgress?.({ ...p, part: 'audio' }) });
+      } catch (e) {
+        if (isUserAbort(e) || signal?.aborted) throw e;
+        if (!item.audio.optional) warning = L('noAudio');
+      }
+      if (audio) {
+        try {
+          const r = await mergeAV({ blob, ext }, { blob: audio.blob, ext: audio.ext }, conv('merge'));
+          blob = r.blob; ext = r.ext;
+        } catch (e) {
+          if (isUserAbort(e) || signal?.aborted) throw e;
+          extras.push({ blob: audio.blob, filename: buildFilename({ ...item, filename: null, name: `${item.name || 'media'}_audio` }, audio.ext) });
+          warning = L('errConvert');
+        }
+      }
     }
+
+    // 2. Mode-driven conversions (cobalt results are already final).
+    const target = AUDIO_TARGET[settings.audioFormat];
+    const wantAudio = item.transform === 'audio'
+      || (!item.final && settings.mode === 'audio' && type !== 'photo' && type !== 'gif' && (isVideoExt(ext) || (target && ext !== target && hasSound(ext))));
+    const wantMute = item.transform === 'mute' || (!item.final && settings.mode === 'mute' && type === 'video' && isVideoExt(ext));
+    if (useFf && wantAudio && hasSound(ext)) {
+      const r = await extractAudio({ blob, ext }, settings.audioFormat, conv('convert', (target || 'audio').toUpperCase()));
+      blob = r.blob; ext = r.ext; type = 'audio';
+    } else if (useFf && wantMute) {
+      const r = await stripAudio({ blob, ext }, conv('convert', ext.toUpperCase()));
+      blob = r.blob; ext = r.ext;
+    } else if (useFf && ext === 'ts') {
+      const r = await remuxToMp4({ blob, ext }, conv('convert', 'MP4'));
+      blob = r.blob; ext = r.ext;
+    }
+  } catch (e) {
+    if (isUserAbort(e) || signal?.aborted) throw e;
+    warning = L('errConvert');
   }
-  if (manual) throw new ManualDownload(manual.url, buildFilename(item, manual.ext), !!item.attachment);
-  throw errors.find((e) => !e.net) || errors[0] || new ResolveError(t('errNoMedia'));
+  const named = { ...item, type };
+  const disp = filenameFromDisposition(got.disposition);
+  const filename = !item.name && !item.filename && disp ? sanitizeFilename(disp) : buildFilename(named, ext);
+  return { blob, filename, warning, extras };
+}
+
+/**
+ * Download one item into memory → { blob, filename, warning?, extras? }.
+ * Order: chosen variant → item fallbacks → other variants, each direct then via proxy;
+ * then the rest of the resolver chain (another API, or cobalt) if everything failed.
+ * onProgress receives { loaded, total } | { segments, done, total, loaded } |
+ * { stage: 'load'|'merge'|'convert'|'retry', ... } | { part: 'audio', ... }.
+ */
+export async function fetchItem(item, { settings, signal, onProgress, variant } = {}) {
+  item = await concretize(item, { settings, signal });
+  // Audio-only and the source has a separate audio track: skip the video entirely.
+  if (settings.mode === 'audio' && item.audio && !item.final && canMerge(settings)) {
+    item = { ...item, ...item.audio, type: 'audio', variants: undefined, audio: undefined, ext: item.audio.ext || 'm4a' };
+  }
+  const chosen = variant || pickVariant(item.variants, settings.quality);
+  const primary = chosen ? { ...chosen } : { url: item.url, kind: item.kind, ext: item.ext };
+  const candidates = [primary, ...(item.fallbacks || []), ...variantFallbacks(item.variants, chosen)];
+  let got;
+  try {
+    got = await fetchCandidates(item, candidates, { settings, signal, onProgress });
+  } catch (e) {
+    if (isUserAbort(e) || signal?.aborted) throw e;
+    if (item.retry) {
+      onProgress?.({ stage: 'retry' });
+      try {
+        const res = await resolve(item.retry.url, { settings, signal, skip: item.retry.skip, noGeneric: true });
+        if (res.items.length === 1) return await fetchItem(res.items[0], { settings, signal, onProgress });
+      } catch (e2) {
+        if (isUserAbort(e2) || signal?.aborted) throw e2;
+      }
+    }
+    throw e;
+  }
+  return postProcess(item, got, { settings, signal, onProgress });
 }

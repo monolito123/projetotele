@@ -19,7 +19,7 @@ export const PLATFORMS = [
   P('twitch', 'Twitch', '#9146ff', ['twitch.tv'], ['cobalt']),
   P('streamable', 'Streamable', '#0f90fa', ['streamable.com'], ['streamable', 'cobalt']),
   P('soundcloud', 'SoundCloud', '#ff5500', ['soundcloud.com', 'snd.sc'], ['cobalt']),
-  P('pinterest', 'Pinterest', '#e60023', ['pin.it'], ['cobalt'], { hostRe: /(^|\.)pinterest\.[a-z]{2,3}(\.[a-z]{2})?$/i }),
+  P('pinterest', 'Pinterest', '#e60023', ['pin.it'], ['pinterest', 'cobalt'], { hostRe: /(^|\.)pinterest\.[a-z]{2,3}(\.[a-z]{2})?$/i }),
   P('tumblr', 'Tumblr', '#5a6f8f', ['tumblr.com'], ['cobalt']),
   P('snapchat', 'Snapchat', '#f7e600', ['snapchat.com'], ['cobalt']),
   P('bilibili', 'Bilibili', '#00a1d6', ['bilibili.com', 'bilibili.tv', 'b23.tv'], ['cobalt']),
@@ -36,6 +36,12 @@ export const PLATFORMS = [
   P('peertube', 'PeerTube', '#f1680d', ['framatube.org', 'tilvids.com', 'peertube.tv'], ['peertube'], {
     pathRe: /^\/(?:w\/(?:p\/)?[A-Za-z0-9]{20,24}|videos\/(?:watch|embed)\/(?:playlist\/)?[0-9a-f-]{36})\/?$/,
   }),
+  P('misskey', 'Misskey / Sharkey', '#86b300', ['misskey.io', 'misskey.design', 'sharkey.team'], ['misskey'], {
+    pathRe: /^\/notes\/[a-z0-9]{8,}\/?$/i,
+  }),
+  P('lemmy', 'Lemmy', '#00bc8c', ['lemmy.world', 'lemmy.ml', 'sh.itjust.works', 'lemm.ee', 'programming.dev', 'feddit.org'], ['lemmy'], {
+    pathRe: /^\/post\/\d+\/?$/,
+  }),
   P('archive', 'Internet Archive', '#9aa0a6', ['archive.org'], ['archive']),
   P('giphy', 'Giphy', '#00e68a', ['giphy.com'], ['giphy']),
   P('imgur', 'Imgur', '#1bb76e', ['imgur.com'], ['imgur']),
@@ -46,7 +52,7 @@ export const PLATFORMS = [
   P('kick', 'Kick', '#53fc18', ['kick.com'], ['generic']),
   P('rumble', 'Rumble', '#85c742', ['rumble.com'], ['generic']),
   P('linkedin', 'LinkedIn', '#0a66c2', ['linkedin.com'], ['generic']),
-  P('odysee', 'Odysee', '#ef1970', ['odysee.com'], ['generic']),
+  P('odysee', 'Odysee', '#ef1970', ['odysee.com'], ['odysee']),
   P('kwai', 'Kwai', '#ff7b00', ['kwai.com', 'kw.ai'], ['generic']),
   P('coub', 'Coub', '#0332ff', ['coub.com'], ['generic']),
 ];

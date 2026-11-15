@@ -1,23 +1,44 @@
-# getvid — paste a link, the video downloads itself
+# getvid: paste a link, the video downloads itself
 
-A **frontend-only** video downloader (plain HTML/CSS/JS, no build step, no backend of its own).
-Paste a link (or several) and the page works out the platform and finds the media:
+**Live site:** https://monolito123.github.io/projetotele/ (once GitHub Pages is enabled, see [Publishing](#publishing))
 
-- **one video** → it downloads right away;
-- **several videos/photos** (carousels, threads, galleries, playlists, pages with many players) → a picker opens so you choose **one or more**, then download them one by one or **as a single ZIP**.
+A **frontend-only** video downloader: plain HTML/CSS/JS, no build step and no backend of its own.
+Paste a link (or several). The page works out the platform and finds the media:
 
-> 🇧🇷 *Cole o link e o vídeo baixa sozinho. Se o post tiver vários vídeos/fotos, você escolhe quais quer (um, vários ou todos, inclusive em ZIP). A interface fica em português ou inglês automaticamente.*
+- **one video**: it downloads right away;
+- **several videos/photos** (carousels, threads, galleries, playlists, pages with many players): a picker opens so you choose **one or more**, then download them one by one or **as a single ZIP**.
 
-## Run it
+> 🇧🇷 *Cole o link e o vídeo baixa sozinho. Se o post tiver vários vídeos/fotos, você escolhe quais quer (um, vários ou todos, inclusive em ZIP). A interface está em 14 idiomas e troca na hora.*
 
-ES modules need to be served over HTTP (not `file://`):
+## Languages
 
-```bash
-python3 -m http.server 8000
-# open http://localhost:8000
-```
+The interface is fully translated into **14 languages**, and switching is **instant**. No reload is needed, and cards already on screen re-render too:
 
-Deploy anywhere static: **GitHub Pages** (Settings → Pages → deploy from branch, root folder), Netlify, Vercel, or Cloudflare Pages. A `.nojekyll` file is included.
+English · Português · Español · Français · Deutsch · Italiano · Русский · Türkçe · العربية (right-to-left) · हिन्दी · Bahasa Indonesia · 日本語 · 한국어 · 中文
+
+The browser language is detected automatically. Browsers with an **on-device translator** (Chrome's built-in Translator API) also get:
+
+- **25 more interface languages** (Polski, Nederlands, Українська, Tiếng Việt, ไทย, فارسی, עברית, Svenska…). They are machine-translated on the device and cached; placeholders and brand names are protected.
+- **Instant translation of post titles** into your language, with a 🌐 *Translate / Original* toggle on each card. Nothing is sent to any server.
+
+Translations live in [`js/locales/`](js/locales/). To add a language, copy `en.js`, translate the values and add it to `LANGS` in [`js/i18n.js`](js/i18n.js).
+
+## Download compatibility
+
+| Problem | What getvid does |
+|---|---|
+| Audio and video stored separately (Reddit, high-quality YouTube, HLS with a separate audio track, cobalt "local processing") | Merges them **in the browser** with ffmpeg.wasm into one MP4/WebM |
+| HLS streams in MPEG-TS | Remuxed to **MP4**, so they play on phones and in galleries |
+| "Audio only" for a source with no separate audio (X, Bluesky, TikTok…) | Extracts the audio to **MP3** (or M4A/OGG/Opus/WAV) |
+| "Muted" | Strips the audio track |
+| Connection drops mid-download | **Resumes** with HTTP Range; stalled transfers time out and retry |
+| Server says `application/octet-stream`, or the URL has no extension | Detects the real type from the file's bytes |
+| Chosen quality fails | Tries the other qualities, then the item's fallbacks, then **another source** (e.g. vxTwitter after FxTwitter, or your cobalt server) |
+| The site blocks pages from saving its files (CORS) | Built-in **player** to save it from (⋮ → Download), plus "open in new tab" |
+| Phones | **Save to gallery / Share** button (Web Share API) after each download |
+| CDNs that reject foreign `Referer`s (e.g. X/Twitter) | All requests are sent without a referrer |
+
+The converter (≈31 MB, ffmpeg core from jsDelivr with unpkg as a fallback) only downloads the first time it's needed and is then cached. It can be turned off in ⚙ Settings, and then separate tracks are offered as two files.
 
 ## How each platform is handled
 
@@ -25,62 +46,83 @@ Each link goes through a chain of resolvers. The first one that works wins. If n
 
 | Platform | How | Works with no setup? |
 |---|---|---|
-| **X / Twitter** (x.com, twitter.com, fxtwitter…) | FxTwitter API → vxTwitter → cobalt | ✅ videos, GIFs, photos, multi-media posts |
-| **TikTok** (incl. vm./vt. short links) | TikWM API → cobalt | ✅ HD/SD/watermark, photo slideshows + audio |
+| **X / Twitter** | FxTwitter API → vxTwitter → cobalt | ✅ videos, GIFs, photos, multi-media posts |
+| **TikTok** (incl. vm./vt. links) | TikWM API → cobalt | ✅ HD/SD/watermark, photo slideshows + audio |
 | **Bluesky** | public AppView + author's PDS (original files) → cobalt | ✅ videos, image sets, quote posts |
-| **Mastodon / Pixelfed** (any instance) | instance API | ✅ |
+| **Mastodon / Pixelfed**, **Misskey / Sharkey**, **Lemmy** (any instance) | instance APIs | ✅ |
 | **PeerTube** (any instance) | instance API (videos and playlists) | ✅ |
+| **Odysee** | LBRY API + Odysee CDN | ✅ |
+| **Pinterest** | widget API → cobalt | ✅ images; videos where the CDN allows it |
 | **Internet Archive** | metadata API (groups formats, picks MP4) | ✅ |
-| **Giphy, Imgur, 9GAG, Dropbox, Google Drive** | URL rewriting to the real file | ✅ (some CDNs need "Open file") |
-| **Streamable** | public API → cobalt | ✅ when CORS allows it, else "Open file" or cobalt |
-| **Reddit** | cobalt → public JSON (video + audio as separate files) | ⚠️ partial |
+| **Giphy, Imgur, 9GAG, Dropbox, Google Drive** | URL rewriting to the real file | ✅ (some need the player) |
+| **Streamable** | public API → cobalt | ✅ via player, or cobalt |
+| **Reddit** | cobalt → public JSON + ffmpeg merge | ⚠️ the public JSON is blocked on some networks |
 | **Direct files** (`.mp4 .webm .mov .mp3 .jpg…`) | fetched directly | ✅ |
-| **HLS streams** (`.m3u8`) | built-in downloader: picks quality, AES-128, fMP4 | ✅ |
+| **HLS streams** (`.m3u8`) | built-in downloader: quality, AES-128, fMP4, separate audio | ✅ |
 | **YouTube** (videos, Shorts, playlists) | cobalt → Piped → Invidious | 🔧 needs cobalt (public Piped/Invidious are mostly blocked by YouTube) |
-| **Instagram, Facebook, Vimeo, Dailymotion, Twitch clips, SoundCloud, Pinterest, Tumblr, Snapchat, Bilibili, Loom, Newgrounds, OK.ru, VK, Rutube, Medal, Xiaohongshu** | cobalt | 🔧 needs cobalt |
-| **Threads, Telegram, Kick, Rumble, LinkedIn, Odysee, Kwai, Coub, any other site** | page scan (og:video, `<video>`, JSON-LD, raw `.mp4/.m3u8` URLs, embedded YouTube/Vimeo… players) | 🔧 usually needs the CORS proxy |
+| **Instagram, Facebook, Vimeo, Dailymotion, Twitch clips, SoundCloud, Tumblr, Snapchat, Bilibili, Loom, Newgrounds, OK.ru, VK, Rutube, Medal, Xiaohongshu** | cobalt | 🔧 needs cobalt |
+| **Threads, Telegram, Kick, Rumble, LinkedIn, Kwai, Coub, any other site** | page scan (og:video, `<video>`, JSON-LD, raw media URLs, embedded players) | 🔧 usually needs the CORS proxy |
 | Netflix, Prime Video, Disney+, Spotify… | refused (DRM) | ❌ |
 
 ### Why some platforms need a server
 
-A web page can only read another site if that site allows it (CORS). Instagram, YouTube, Facebook and others don't, and their media is often split into separate audio and video tracks. A page alone can't get past that. That's why there are two optional, self-hosted helpers in [`self-host/`](self-host/):
+A web page can only read another site if that site allows it (CORS). Instagram, YouTube, Facebook and others don't. That's why there are two optional, self-hosted helpers in [`self-host/`](self-host/):
 
-1. **cobalt** ([imputnet/cobalt](https://github.com/imputnet/cobalt), open source). Run it with [`self-host/docker-compose.yml`](self-host/docker-compose.yml), then paste its URL (optionally `URL | API_KEY`) in **⚙ Settings → cobalt servers**. This unlocks every 🔧 platform above and returns finished, merged files. Public cobalt instances require their own Turnstile captcha, so they can't be called from other sites.
-2. **CORS proxy**: a ~40-line Cloudflare Worker, [`self-host/cors-proxy-worker.js`](self-host/cors-proxy-worker.js), restricted to your own site's origin. Set it as `https://<worker>.workers.dev/?url={url}` in settings. It's used for page scanning and for CDNs that block the browser.
+1. **cobalt** ([imputnet/cobalt](https://github.com/imputnet/cobalt), open source). Run it with [`self-host/docker-compose.yml`](self-host/docker-compose.yml), then paste its URL (optionally `URL | API_KEY`) in **⚙ Settings → cobalt servers**. This unlocks every 🔧 platform above. Public cobalt instances require their own captcha, so they can't be called from other sites.
+2. **CORS proxy**: a ~40-line Cloudflare Worker, [`self-host/cors-proxy-worker.js`](self-host/cors-proxy-worker.js), restricted to your own site's origin. It's used for page scanning and for CDNs that block the browser.
 
-When a single file was found natively but its CDN blocks the browser (e.g. Streamable), getvid automatically retries through cobalt if you configured one. Without cobalt, it shows an **Open file** button so you can save it from the new tab.
+## Publishing
+
+The site is plain static files, and [`.github/workflows/pages.yml`](.github/workflows/pages.yml) copies them to the **`gh-pages`** branch on every push.
+
+To turn the site on (one time):
+
+1. **GitHub Pages on a private repository needs a paid plan** (Pro/Team/Enterprise). On a free account, make the repository public first: *Settings → General → Danger Zone → Change visibility*.
+2. *Settings → Pages → Build and deployment → Source: **Deploy from a branch** → Branch: **`gh-pages`**, folder **`/ (root)`** → Save.*
+3. After about a minute the site is live at **https://monolito123.github.io/projetotele/**.
+
+It also works on Netlify, Vercel or Cloudflare Pages (drag and drop the folder). To run it locally, ES modules need HTTP rather than `file://`:
+
+```bash
+python3 -m http.server 8000   # then open http://localhost:8000
+```
 
 ## Features
 
 - Auto-start on paste (anywhere on the page), on Enter, on drag-and-drop of a link, or on the **Paste** button
-- Several links at once (one per line, or any text containing links). They are processed 3 at a time
+- Several links at once (one per line, or any text containing links), processed 3 at a time
 - Picker for multi-media posts and playlists: select all/none, thumbnails, durations, download selected, or **ZIP**
-- Quality (best → 240p), mode (video / audio only / muted), audio format for cobalt
+- Quality (best → 240p), mode (video / audio only / muted), audio format
 - Per-item quality buttons and "audio only" extras on each result card
 - Bookmarklet (footer) and mobile **share target** (`?url=` / `?text=`), so you can share from the TikTok/X app straight to the installed site
-- Portuguese/English UI, light/dark theme, mobile layout
+- 14 languages + on-device machine translation, light/dark theme, mobile layout, right-to-left support
 - Settings are stored in `localStorage` only. No analytics, no accounts
 
 ## Files
 
 ```
-index.html            page + dialogs
-css/style.css         styles (light/dark)
-js/app.js             UI: jobs, picker, settings, paste/drop handling
-js/resolvers.js       per-platform resolvers + resolution engine
-js/platforms.js       platform catalogue / URL detection
-js/download.js        fetch with progress, fallbacks, CORS proxy, cobalt retry
-js/m3u8.js            HLS playlist parser + segment downloader (AES-128, fMP4)
-js/zip.js             store-only ZIP writer
-js/util.js, i18n.js, settings.js
-self-host/            cobalt docker-compose + CORS proxy worker
+index.html               page + dialogs (picker, player, settings)
+css/style.css            styles (light/dark, RTL-aware)
+js/app.js                UI: jobs, picker, player, settings, instant re-rendering on language change
+js/i18n.js               languages, instant switching, on-device machine translation
+js/locales/*.js          14 hand-written translations
+js/resolvers.js          per-platform resolvers + resolution engine (fallback chain, retries)
+js/platforms.js          platform catalogue / URL detection
+js/download.js           fallbacks, proxy, alternate-source retry, ffmpeg post-processing
+js/ffmpeg.js             on-demand ffmpeg.wasm: merge, remux, extract audio, mute
+js/m3u8.js               HLS playlist parser + segment downloader (AES-128, fMP4)
+js/util.js               resumable fetch, file sniffing, helpers
+js/zip.js                store-only ZIP writer
+vendor/ffmpeg/           @ffmpeg/ffmpeg 0.12.15 (MIT), unmodified
+self-host/               cobalt docker-compose + CORS proxy worker
+.github/workflows/       GitHub Pages publishing
 ```
 
 ## Limitations
 
 - The free third-party APIs (FxTwitter, TikWM, Bluesky, Piped…) can change, rate-limit or go offline. Your own cobalt server is the most reliable option.
-- Files are assembled in memory before saving, so very large videos (several GB) can hit browser memory limits.
-- MPEG-TS HLS streams are saved as `.ts`; VLC/most players open them, or remux with `ffmpeg -i in.ts -c copy out.mp4`.
+- Files are assembled in memory, and ffmpeg.wasm works on files up to roughly 1–2 GB. Very large videos may need to be downloaded without conversion (turn the converter off).
 - DRM-protected services cannot be downloaded.
+- Machine-translated languages and title translation need a browser that ships the on-device Translator API (desktop Chrome at the time of writing). Elsewhere, the 14 hand-written languages are offered.
 
 Only download content you have the right to download, and respect each platform's terms of service.

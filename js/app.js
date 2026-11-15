@@ -1,10 +1,12 @@
-import { t, setLang, detectLang, applyI18n, getLang } from './i18n.js';
+import {
+  t, L, render, setLang, detectLang, applyI18n, getLang, LANGS, MT_LANGS, hasTranslator, isHandmade, translateText,
+} from './i18n.js';
 import { getSettings, saveSettings, resetSettings, cobaltInstances } from './settings.js';
 import { PLATFORMS, DIRECT, HLS, platformKind } from './platforms.js';
 import { resolve } from './resolvers.js';
 import { fetchItem, saveBlob, openUrl, ManualDownload } from './download.js';
 import { makeZip } from './zip.js';
-import { extractUrls, formatBytes, formatDuration, isUserAbort, sanitizeFilename, sleep } from './util.js';
+import { extractUrls, formatBytes, formatDuration, isUserAbort, sanitizeFilename, sleep, errText } from './util.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const safeHttp = (u) => (typeof u === 'string' && /^https?:\/\//i.test(u) ? u : null);
@@ -19,7 +21,7 @@ function h(tag, props = {}, ...kids) {
     else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
     else el.setAttribute(k, v === true ? '' : String(v));
   }
-  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : render(kid));
   return el;
 }
 
@@ -35,6 +37,7 @@ function icon(name) {
   s.innerHTML = ICONS[name] || ICONS.video; // static markup only
   return s;
 }
+const iconFor = (type) => icon(type === 'photo' ? 'photo' : type === 'audio' ? 'audio' : 'video');
 const typeLabel = (type) => ({ video: t('typeVideo'), audio: t('typeAudio'), photo: t('typePhoto'), gif: t('typeGif') }[type] || t('typeLink'));
 
 /* ------------------------------------------------------------------ */
@@ -42,12 +45,12 @@ const typeLabel = (type) => ({ video: t('typeVideo'), audio: t('typeAudio'), pho
 /* ------------------------------------------------------------------ */
 
 let toastTimer = 0;
-function toast(msg) {
+function toast(msg, ms = 3200) {
   const el = $('#toast');
-  el.textContent = msg;
+  el.textContent = render(msg);
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, 3200);
+  toastTimer = setTimeout(() => { el.hidden = true; }, ms);
 }
 
 const THEME_KEY = 'getvid.theme';
@@ -63,20 +66,17 @@ function toggleTheme() {
 }
 
 /* ------------------------------------------------------------------ */
-/* jobs                                                                */
+/* jobs — every visible string is stored as parts and re-rendered      */
+/* on language change, so switching language is instant everywhere.    */
 /* ------------------------------------------------------------------ */
 
 const jobs = new Map();
 let jobSeq = 0;
 
-// At most 3 links are analysed/downloaded at the same time.
 const MAX_PARALLEL = 3;
 let running = 0;
 const waiting = [];
-function schedule(fn) {
-  waiting.push(fn);
-  pump();
-}
+function schedule(fn) { waiting.push(fn); pump(); }
 function pump() {
   while (running < MAX_PARALLEL && waiting.length) {
     const fn = waiting.shift();
@@ -91,22 +91,26 @@ function createJob(url) {
     thumb: h('div', { class: 'thumb' }, icon('video')),
     badge: h('span', { class: 'badge' }, '…'),
     via: h('span', { class: 'via' }),
+    tr: h('button', { class: 'linkish', type: 'button', hidden: true }),
     title: h('h3', { class: 'title' }, url),
     src: h('div', { class: 'src' }, url),
     status: h('p', { class: 'status' }),
     bar: h('div', { class: 'bar indet' }, h('i')),
     sub: h('ul', { class: 'sublist', hidden: true }),
-    details: h('details', { hidden: true }, h('summary', {}, t('details')), h('ul')),
+    details: h('details', { hidden: true }, h('summary'), h('ul')),
     actions: h('div', { class: 'actions' }),
+    close: h('button', { class: 'close', type: 'button' }, '×'),
   };
-  const job = { id, url, ui, ctrl: null, result: null, manual: null, done: false };
-  const close = h('button', { class: 'close', type: 'button', 'aria-label': t('remove'), title: t('remove'), onclick: () => removeJob(job) }, '×');
+  const job = { id, url, ui, ctrl: null, result: null, manual: null, done: false, status: { parts: '', cls: '' }, actionsFn: () => [], rows: [], attempts: [] };
+  ui.close.addEventListener('click', () => removeJob(job));
+  ui.tr.addEventListener('click', () => toggleTitleTranslation(job));
   job.el = h('article', { class: 'job' },
     ui.thumb,
-    h('div', { class: 'body' }, h('div', { class: 'meta' }, ui.badge, ui.via), ui.title, ui.src, ui.status, ui.bar, ui.sub, ui.details, ui.actions),
-    close);
+    h('div', { class: 'body' }, h('div', { class: 'meta' }, ui.badge, ui.via, ui.tr), ui.title, ui.src, ui.status, ui.bar, ui.sub, ui.details, ui.actions),
+    ui.close);
   $('#jobs').prepend(job.el);
   jobs.set(id, job);
+  rerenderJob(job);
   return job;
 }
 
@@ -118,11 +122,12 @@ function removeJob(job) {
   if (qi >= 0) pickerQueue.splice(qi, 1);
 }
 
-function setStatus(job, text, cls = '') {
-  job.ui.status.textContent = text;
+function paintStatus(job) {
+  job.ui.status.textContent = render(job.status.parts);
   job.el.classList.remove('ok', 'err', 'warn');
-  if (cls) job.el.classList.add(cls);
+  if (job.status.cls) job.el.classList.add(job.status.cls);
 }
+function setStatus(job, parts, cls = '') { job.status = { parts, cls }; paintStatus(job); }
 
 function setBar(job, v) {
   const b = job.ui.bar;
@@ -132,10 +137,48 @@ function setBar(job, v) {
   b.firstChild.style.width = typeof v === 'number' ? `${Math.max(2, Math.round(v * 100))}%` : '';
 }
 
-function setActions(job, list) { job.ui.actions.replaceChildren(...list.filter(Boolean)); }
+function setActions(job, fn) { job.actionsFn = fn; job.ui.actions.replaceChildren(...fn().filter(Boolean)); }
+
+function paintRows(job) {
+  job.rows.forEach((r) => {
+    if (r.link) return;
+    r.s.textContent = render(r.parts);
+    r.s.className = `s${r.cls ? ` ${r.cls}` : ''}`;
+  });
+}
+
+function paintDetails(job) {
+  const d = job.ui.details;
+  d.querySelector('summary').textContent = t('details');
+  d.querySelector('ul').replaceChildren(...job.attempts.map((a) => h('li', {}, h('b', {}, a.via), ': ', render(a.error))));
+  d.hidden = !job.attempts.length;
+}
+
+function paintTitle(job) {
+  const r = job.result;
+  const tr = job.translated;
+  const showTr = tr && !job.showOriginal;
+  job.ui.title.textContent = showTr ? tr.text : (r?.title || job.url);
+  job.ui.title.title = showTr ? (r?.title || '') : '';
+  job.ui.tr.hidden = !job.canTranslate;
+  job.ui.tr.textContent = `🌐 ${tr && !job.showOriginal ? t('original') : t('translate')}`;
+}
+
+/** Re-render every string of a job in the current language. */
+function rerenderJob(job) {
+  paintStatus(job);
+  job.ui.actions.replaceChildren(...job.actionsFn().filter(Boolean));
+  paintRows(job);
+  paintDetails(job);
+  if (job.result) job.ui.via.textContent = t('via', { via: job.result.via });
+  job.ui.close.title = t('remove');
+  job.ui.close.setAttribute('aria-label', t('remove'));
+  paintTitle(job);
+}
 
 const btn = (label, onclick, kind = 'ghost') => h('button', { type: 'button', class: `btn ${kind}`, onclick }, label);
 const linkBtn = (label, href, filename, kind = 'primary') => h('a', { class: `btn ${kind}`, href, target: '_blank', rel: 'noopener noreferrer', download: filename || true }, label);
+const cancelBtn = (job) => btn(t('cancel'), () => job.ctrl?.abort());
 
 function setPlatform(job, p) {
   job.ui.badge.textContent = p.name;
@@ -146,20 +189,47 @@ function setThumb(job, url) {
   const src = safeHttp(url);
   if (!src) return;
   const img = h('img', { src, alt: '', referrerpolicy: 'no-referrer', loading: 'lazy' });
-  img.addEventListener('error', () => job.ui.thumb.replaceChildren(icon(job.result?.items?.[0]?.type === 'audio' ? 'audio' : 'video')), { once: true });
+  img.addEventListener('error', () => job.ui.thumb.replaceChildren(iconFor(job.result?.items?.[0]?.type)), { once: true });
   job.ui.thumb.replaceChildren(img);
 }
 
 function renderMeta(job) {
   const r = job.result;
   setPlatform(job, r.platform);
-  job.ui.via.textContent = t('via', { via: r.via });
-  job.ui.title.textContent = r.title || job.url;
-  job.ui.title.title = r.title || '';
   const first = r.items[0];
   if (first?.type === 'audio') job.ui.thumb.replaceChildren(icon('audio'));
   setThumb(job, r.items.find((i) => i.thumb)?.thumb || (first?.type === 'photo' ? first.url : null));
+  job.translated = null;
+  job.showOriginal = false;
+  job.canTranslate = false;
+  rerenderJob(job);
+  autoTranslateTitle(job);
 }
+
+/* ---------------- instant translation of titles ---------------- */
+
+async function autoTranslateTitle(job) {
+  if (!getSettings().translateTitles || !hasTranslator() || !job.result?.title) return;
+  const lang = getLang();
+  const res = await translateText(job.result.title);
+  if (lang !== getLang() || !jobs.has(job.id)) return;
+  job.canTranslate = true; // the API exists: offer the button even when no model is installed yet
+  if (res) job.translated = res;
+  paintTitle(job);
+}
+
+async function toggleTitleTranslation(job) {
+  if (job.translated && !job.showOriginal) { job.showOriginal = true; paintTitle(job); return; }
+  if (job.translated) { job.showOriginal = false; paintTitle(job); return; }
+  job.ui.tr.disabled = true;
+  const res = await translateText(job.result?.title, { allowDownload: true }); // click = user gesture → may download a model
+  job.ui.tr.disabled = false;
+  if (res) { job.translated = res; job.showOriginal = false; }
+  else toast(L('errMtUnavailable'));
+  paintTitle(job);
+}
+
+/* ---------------- progress ---------------- */
 
 /** Progress callback, throttled to one paint per frame. Call .stop() before writing a final status. */
 function progressFn(onPaint) {
@@ -173,27 +243,37 @@ function progressFn(onPaint) {
   fn.stop = () => { stopped = true; if (raf) cancelAnimationFrame(raf); raf = 0; };
   return fn;
 }
-function progressText(p) {
-  if (p.segments) return { frac: p.done / p.total, text: `${p.done}/${p.total} ${t('segments')} · ${formatBytes(p.loaded)}` };
-  if (p.total) return { frac: p.loaded / p.total, text: `${Math.round((p.loaded / p.total) * 100)}% · ${formatBytes(p.loaded)} / ${formatBytes(p.total)}` };
-  return { frac: null, text: formatBytes(p.loaded) };
+
+const pct = (f) => `${Math.round(Math.max(0, Math.min(1, f)) * 100)}%`;
+
+/** → { frac, parts } for any progress event. */
+function progressParts(p) {
+  const pre = p.part === 'audio' ? '♪ ' : '';
+  if (p.stage === 'load') return { frac: p.total ? p.loaded / p.total : null, parts: [L('statusLoadingConverter', { pct: p.total ? pct(p.loaded / p.total) : formatBytes(p.loaded) })] };
+  if (p.stage === 'merge') return { frac: p.frac, parts: [L('statusMerging'), ' ', pct(p.frac || 0)] };
+  if (p.stage === 'convert') return { frac: p.frac, parts: [L('statusConverting', { fmt: p.fmt || '' }), ' ', pct(p.frac || 0)] };
+  if (p.stage === 'retry') return { frac: null, parts: [L('statusRetrying')] };
+  if (p.segments) return { frac: p.done / p.total, parts: [pre, L('statusDownloading'), ` ${p.done}/${p.total} `, L('segments'), ` · ${formatBytes(p.loaded)}`] };
+  if (p.total) return { frac: p.loaded / p.total, parts: [pre, L('statusDownloading'), ` ${pct(p.loaded / p.total)} · ${formatBytes(p.loaded)} / ${formatBytes(p.total)}`] };
+  return { frac: null, parts: [pre, L('statusDownloading'), ` ${formatBytes(p.loaded)}`] };
 }
+
+/* ---------------- running a job ---------------- */
 
 async function runJob(job) {
   job.ctrl?.abort();
   job.ctrl = new AbortController();
   const { signal } = job.ctrl;
-  job.manual = null;
-  job.done = false;
-  job.ui.details.hidden = true;
+  Object.assign(job, { manual: null, done: false, file: null, attempts: [], rows: [] });
   job.ui.sub.hidden = true;
-  setStatus(job, t('statusDetecting'));
+  paintDetails(job);
+  setStatus(job, [L('statusDetecting')]);
   setBar(job, 'indet');
-  setActions(job, [btn(t('cancel'), () => job.ctrl.abort())]);
+  setActions(job, () => [cancelBtn(job)]);
   try {
     const res = await resolve(job.url, {
       settings: getSettings(), signal,
-      onStatus: (msg, info) => { if (info?.platform) setPlatform(job, info.platform); setStatus(job, msg); },
+      onStatus: (msg, info) => { if (info?.platform) setPlatform(job, info.platform); setStatus(job, [msg]); },
     });
     if (signal.aborted) throw signal.reason;
     job.result = res;
@@ -201,18 +281,18 @@ async function runJob(job) {
     renderMeta(job);
     if (res.items.length === 1) {
       if (getSettings().autoDownload) await downloadSingle(job, res.items[0]);
-      else { setBar(job, 'hide'); setStatus(job, t('statusReady')); renderSingleActions(job); }
+      else { setBar(job, 'hide'); setStatus(job, [L('statusReady')]); setActions(job, () => singleActions(job)); }
     } else {
       setBar(job, 'hide');
-      setStatus(job, `${t('statusFound', { n: res.items.length })} — ${t('statusWaitingChoice')}`);
-      renderMultiActions(job);
+      setStatus(job, [L('statusFound', { n: res.items.length }), ' — ', L('statusWaitingChoice')]);
+      setActions(job, () => multiActions(job));
       queuePicker(job);
     }
   } catch (e) {
     if (isUserAbort(e) || signal.aborted) {
       setBar(job, 'hide');
-      setStatus(job, t('statusCancelled'), 'warn');
-      setActions(job, [btn(t('retry'), () => runJob(job), 'primary')]);
+      setStatus(job, [L('statusCancelled')], 'warn');
+      setActions(job, () => [btn(t('retry'), () => runJob(job), 'primary')]);
       return;
     }
     showError(job, e);
@@ -222,148 +302,187 @@ async function runJob(job) {
 function showError(job, e) {
   setBar(job, 'hide');
   if (e.platform) setPlatform(job, e.platform);
-  setStatus(job, e.message || t('statusFailed'), 'err');
-  const attempts = e.attempts || [];
-  job.ui.details.querySelector('ul').replaceChildren(...attempts.map((a) => h('li', {}, h('b', {}, a.via), ': ', a.error)));
-  job.ui.details.hidden = !attempts.length;
-  setActions(job, [
+  setStatus(job, [errText(e) || L('statusFailed')], 'err');
+  job.attempts = e.attempts || [];
+  paintDetails(job);
+  setActions(job, () => [
     e.needsCobalt ? btn(`⚙ ${t('settings')}`, openSettings, 'primary') : null,
     e.fatal ? null : btn(t('retry'), () => runJob(job), e.needsCobalt ? 'ghost' : 'primary'),
   ]);
+}
+
+function saveExtras(extras) {
+  (extras || []).forEach((x, i) => setTimeout(() => saveBlob(x.blob, x.filename), 400 * (i + 1)));
 }
 
 async function downloadSingle(job, item, variant) {
   if (!job.ctrl || job.ctrl.signal.aborted) job.ctrl = new AbortController();
   const { signal } = job.ctrl;
   job.manual = null;
-  setActions(job, [btn(t('cancel'), () => job.ctrl.abort())]);
-  setStatus(job, t('statusDownloading'));
+  job.file = null;
+  setActions(job, () => [cancelBtn(job)]);
+  setStatus(job, [L('statusDownloading')]);
   setBar(job, 'indet');
   const onProgress = progressFn((p) => {
-    const { frac, text } = progressText(p);
-    setBar(job, frac == null ? 'indet' : frac);
-    setStatus(job, `${t('statusDownloading')} ${text}`);
+    const { frac, parts } = progressParts(p);
+    setBar(job, frac == null || Number.isNaN(frac) ? 'indet' : frac);
+    setStatus(job, parts);
   });
   try {
-    const { blob, filename } = await fetchItem(item, { settings: getSettings(), signal, variant, onProgress }).finally(onProgress.stop);
-    setStatus(job, t('statusSaving'));
+    const { blob, filename, warning, extras } = await fetchItem(item, { settings: getSettings(), signal, variant, onProgress }).finally(onProgress.stop);
+    setStatus(job, [L('statusSaving')]);
     saveBlob(blob, filename);
+    saveExtras(extras);
     job.done = true;
+    try { job.file = new File([blob], filename, { type: blob.type || 'application/octet-stream' }); } catch { job.file = null; }
     setBar(job, 1);
-    setStatus(job, `${t('statusDone')} · ${filename} · ${formatBytes(blob.size)}`, 'ok');
+    setStatus(job, [L('statusDone'), ` · ${filename} · ${formatBytes(blob.size)}`, warning ? [' — ', warning] : ''], warning ? 'warn' : 'ok');
   } catch (e) {
     if (e instanceof ManualDownload) {
       if (e.attachment && safeHttp(e.url)) {
         openUrl(e.url, e.filename, true);
         job.done = true;
         setBar(job, 1);
-        setStatus(job, `${t('statusDone')} · ${e.filename}`, 'ok');
+        setStatus(job, [L('statusDone'), ` · ${e.filename}`], 'ok');
       } else {
         job.manual = e;
         setBar(job, 'hide');
-        setStatus(job, t('statusManual'), 'warn');
+        setStatus(job, [L('statusManual')], 'warn');
       }
     } else if (isUserAbort(e) || signal.aborted) {
       setBar(job, 'hide');
-      setStatus(job, t('statusCancelled'), 'warn');
+      setStatus(job, [L('statusCancelled')], 'warn');
     } else {
       setBar(job, 'hide');
-      setStatus(job, `${t('statusFailed')}: ${e.message || e}`, 'err');
+      setStatus(job, [L('statusFailed'), ': ', errText(e)], 'err');
     }
   }
-  if (job.result.items.length === 1) renderSingleActions(job);
-  else renderMultiActions(job);
+  setActions(job, () => (job.result.items.length === 1 ? singleActions(job) : multiActions(job)));
 }
 
-function renderSingleActions(job) {
+const canShareFiles = () => !!(navigator.canShare && matchMedia('(pointer: coarse)').matches);
+
+function singleActions(job) {
   const res = job.result;
   const item = res.items[0];
   const acts = [];
-  if (job.manual && safeHttp(job.manual.url)) acts.push(linkBtn(t('openFile'), job.manual.url, job.manual.filename));
+  if (job.manual && safeHttp(job.manual.url)) {
+    acts.push(btn(t('openPlayer'), () => openViewer(job.manual), 'primary'));
+    acts.push(linkBtn(t('openNewTab'), job.manual.url, job.manual.filename, 'ghost'));
+  }
+  if (job.file && canShareFiles() && navigator.canShare({ files: [job.file] })) {
+    acts.push(btn(`⤴ ${t('shareSave')}`, () => navigator.share({ files: [job.file], title: job.file.name }).catch(() => {}), 'primary'));
+  }
   acts.push(btn(job.done ? t('again') : t('download'), () => downloadSingle(job, item), job.done || job.manual ? 'ghost' : 'primary'));
   const vars = item.variants || [];
-  if (vars.length > 1) vars.slice(0, 8).forEach((v) => acts.push(btn(v.label || '?', () => downloadSingle(job, item, v))));
+  if (vars.length > 1) vars.slice(0, 8).forEach((v) => acts.push(btn(render(v.label) || '?', () => downloadSingle(job, item, v))));
   (res.extras || []).forEach((x) => acts.push(btn(`♪ ${t('audioExtra')}${x.ext ? ` (${x.ext.toUpperCase()})` : ''}`, () => downloadSingle(job, x))));
-  setActions(job, acts);
+  return acts;
 }
 
-function renderMultiActions(job) {
+function multiActions(job) {
   const acts = [btn(t('choose'), () => queuePicker(job, true), 'primary')];
-  if (job.manual && safeHttp(job.manual.url)) acts.unshift(linkBtn(t('openFile'), job.manual.url, job.manual.filename));
-  setActions(job, acts);
+  if (job.manual && safeHttp(job.manual.url)) acts.unshift(btn(t('openPlayer'), () => openViewer(job.manual), 'primary'));
+  return acts;
 }
 
 async function downloadMany(job, items, zip) {
   job.ctrl = new AbortController();
   const { signal } = job.ctrl;
-  setActions(job, [btn(t('cancel'), () => job.ctrl.abort())]);
-  const rows = items.map((it, i) => {
-    const s = h('span', { class: 's' }, '…');
-    return { s, li: h('li', {}, h('span', { class: 'n', title: it.name || '' }, `${i + 1}. ${it.name || it.filename || typeLabel(it.type)}`), s) };
+  setActions(job, () => [cancelBtn(job)]);
+  job.rows = items.map((it, i) => {
+    const s = h('span', { class: 's' });
+    const li = h('li', {}, h('span', { class: 'n', title: render(it.name) || '' }, `${i + 1}. ${render(it.name) || it.filename || typeLabel(it.type)}`), s);
+    return { s, li, parts: '…', cls: '' };
   });
-  job.ui.sub.replaceChildren(...rows.map((r) => r.li));
+  job.ui.sub.replaceChildren(...job.rows.map((r) => r.li));
   job.ui.sub.hidden = false;
+  paintRows(job);
 
   const collected = [];
   let ok = 0, manualCount = 0;
   for (let i = 0; i < items.length; i++) {
     if (signal.aborted) break;
-    const row = rows[i];
-    setStatus(job, t('statusDownloadingN', { i: i + 1, n: items.length }));
+    const row = job.rows[i];
+    setStatus(job, [L('statusDownloadingN', { i: i + 1, n: items.length })]);
     setBar(job, i / items.length);
     const onProgress = progressFn((p) => {
-      const { frac, text } = progressText(p);
-      row.s.textContent = text;
-      if (frac != null) setBar(job, (i + frac) / items.length);
+      const { frac, parts } = progressParts(p);
+      row.parts = parts.filter((x) => !(x && x.key === 'statusDownloading'));
+      paintRows(job);
+      if (frac != null && !Number.isNaN(frac)) setBar(job, (i + frac) / items.length);
     });
     try {
-      const { blob, filename } = await fetchItem(items[i], { settings: getSettings(), signal, onProgress }).finally(onProgress.stop);
-      if (zip) collected.push({ name: filename, blob });
-      else { saveBlob(blob, filename); await sleep(400); }
+      const { blob, filename, extras } = await fetchItem(items[i], { settings: getSettings(), signal, onProgress }).finally(onProgress.stop);
+      if (zip) { collected.push({ name: filename, blob }); (extras || []).forEach((x) => collected.push({ name: x.filename, blob: x.blob })); }
+      else { saveBlob(blob, filename); saveExtras(extras); await sleep(400); }
       ok++;
-      row.s.textContent = `✓ ${formatBytes(blob.size)}`;
-      row.s.className = 's ok';
+      Object.assign(row, { parts: `✓ ${formatBytes(blob.size)}`, cls: 'ok' });
     } catch (e) {
-      if (isUserAbort(e) || signal.aborted) { row.s.textContent = t('statusCancelled'); break; }
+      if (isUserAbort(e) || signal.aborted) { Object.assign(row, { parts: [L('statusCancelled')], cls: '' }); break; }
       if (e instanceof ManualDownload && safeHttp(e.url)) {
         if (e.attachment && !zip) {
           openUrl(e.url, e.filename, true);
           ok++;
-          row.s.textContent = '✓';
-          row.s.className = 's ok';
+          Object.assign(row, { parts: '✓', cls: 'ok' });
           await sleep(1500); // give the browser time to start each download
+          paintRows(job);
           continue;
         }
         manualCount++;
-        row.s.replaceChildren(h('a', { href: e.url, target: '_blank', rel: 'noopener noreferrer', download: e.filename }, t('openFile')));
+        row.link = true;
+        row.s.className = 's';
+        row.s.replaceChildren(h('button', { type: 'button', class: 'linkish', onclick: () => openViewer(e) }, t('openPlayer')));
       } else {
-        row.s.textContent = `✕ ${e.message || ''}`.slice(0, 80);
-        row.s.title = e.message || '';
-        row.s.className = 's err';
+        Object.assign(row, { parts: ['✕ ', errText(e)], cls: 'err' });
+        row.s.title = render(errText(e));
       }
     }
+    paintRows(job);
   }
 
   if (signal.aborted) {
     setBar(job, 'hide');
-    setStatus(job, t('statusCancelled'), 'warn');
+    setStatus(job, [L('statusCancelled')], 'warn');
   } else {
     if (zip && collected.length) {
-      setStatus(job, t('statusZipping'));
+      setStatus(job, [L('statusZipping')]);
       setBar(job, 'indet');
       try {
         const z = await makeZip(collected);
         saveBlob(z, `${sanitizeFilename(job.result.title, 'getvid')}.zip`);
       } catch (e) {
         ok = 0;
-        setStatus(job, e.message, 'err');
+        setStatus(job, [errText(e)], 'err');
       }
     }
     setBar(job, 1);
-    const summary = t('statusDoneN', { ok, n: items.length });
-    setStatus(job, manualCount ? `${summary} — ${t('statusManual')}` : summary, ok === items.length ? 'ok' : ok ? 'warn' : 'err');
+    const summary = L('statusDoneN', { ok, n: items.length });
+    setStatus(job, manualCount ? [summary, ' — ', L('statusManual')] : [summary], ok === items.length ? 'ok' : ok ? 'warn' : 'err');
   }
-  renderMultiActions(job);
+  setActions(job, () => multiActions(job));
+}
+
+/* ------------------------------------------------------------------ */
+/* viewer: saving files the source site won't let us fetch             */
+/* ------------------------------------------------------------------ */
+
+function openViewer(manual) {
+  const box = $('#viewerMedia');
+  const url = safeHttp(manual.url);
+  if (!url) return;
+  const ext = (manual.filename.match(/\.([a-z0-9]+)$/i) || [])[1] || '';
+  const kind = manual.type === 'photo' || /^(jpe?g|png|webp|gif|avif)$/i.test(ext) ? 'img'
+    : manual.type === 'audio' || /^(mp3|m4a|aac|ogg|opus|wav|flac)$/i.test(ext) ? 'audio' : 'video';
+  const el = kind === 'img'
+    ? h('img', { src: url, alt: manual.filename, referrerpolicy: 'no-referrer' })
+    : h(kind, { src: url, controls: true, playsinline: true, preload: 'metadata', referrerpolicy: 'no-referrer' });
+  box.replaceChildren(el);
+  $('#viewerName').textContent = manual.filename;
+  const link = $('#viewerOpen');
+  link.href = url;
+  link.download = manual.filename;
+  $('#viewer').showModal();
 }
 
 /* ------------------------------------------------------------------ */
@@ -391,9 +510,10 @@ function renderPicker(job) {
   const items = job.result.items;
   if (!job.sel) job.sel = new Set(items.map((_, i) => i));
   $('#pickerTitle').textContent = t('pickerTitle', { n: items.length });
-  $('#pickerSub').textContent = job.result.title ? `${job.result.platform.name} · ${job.result.title}` : t('pickerSub');
+  const title = job.translated && !job.showOriginal ? job.translated.text : job.result.title;
+  $('#pickerSub').textContent = title ? `${job.result.platform.name} · ${title}` : t('pickerSub');
   $('#pickerGrid').replaceChildren(...items.map((it, i) => tile(job, it, i)));
-  const note = [job.result.note, t('multiNote')].filter(Boolean).join(' ');
+  const note = [render(job.result.note), t('multiNote')].filter(Boolean).join(' ');
   $('#pickerNote').textContent = note;
   $('#pickerNote').hidden = !note;
   updateSel(job);
@@ -404,7 +524,7 @@ function tile(job, it, i) {
   const src = safeHttp(it.thumb || (it.type === 'photo' ? it.url : null));
   if (src) {
     const img = h('img', { src, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' });
-    img.addEventListener('error', () => img.replaceWith(icon(it.type === 'photo' ? 'photo' : it.type === 'audio' ? 'audio' : 'video')), { once: true });
+    img.addEventListener('error', () => img.replaceWith(iconFor(it.type)), { once: true });
     media.append(img);
   } else if ((it.type === 'video' || it.type === 'gif') && it.kind === 'file' && safeHttp(it.url)) {
     const v = h('video', { src: `${it.url}#t=0.5`, muted: true, preload: 'metadata', playsinline: true });
@@ -412,16 +532,18 @@ function tile(job, it, i) {
     v.addEventListener('error', () => v.replaceWith(icon('video')), { once: true });
     media.append(v);
   } else {
-    media.append(icon(it.type === 'photo' ? 'photo' : it.type === 'audio' ? 'audio' : 'video'));
+    media.append(iconFor(it.type));
   }
-  const extra = [it.label, it.duration ? formatDuration(it.duration) : '', it.kind === 'lazy' && !it.label ? t('playlistItem') : '']
+  const extra = [render(it.label), it.duration ? formatDuration(it.duration) : '', it.kind === 'lazy' && !it.label ? t('playlistItem') : '']
     .filter(Boolean).join(' · ');
   const selected = job.sel.has(i);
+  const check = icon('check');
+  check.className = 'check';
   const li = h('li', { class: `tile${selected ? ' sel' : ''}`, tabindex: '0', role: 'checkbox', 'aria-checked': String(selected) },
     media,
     h('span', { class: 'type' }, typeLabel(it.type)),
-    (() => { const c = icon('check'); c.className = 'check'; return c; })(),
-    h('div', { class: 'cap' }, h('b', { title: it.name || '' }, it.name || it.filename || `#${i + 1}`), extra ? h('span', {}, extra) : null));
+    check,
+    h('div', { class: 'cap' }, h('b', { title: render(it.name) || '' }, render(it.name) || it.filename || `#${i + 1}`), extra ? h('span', {}, extra) : null));
   const toggle = () => {
     if (job.sel.has(i)) job.sel.delete(i); else job.sel.add(i);
     const on = job.sel.has(i);
@@ -451,6 +573,49 @@ function startPicked(zip) {
 }
 
 /* ------------------------------------------------------------------ */
+/* language                                                            */
+/* ------------------------------------------------------------------ */
+
+function fillLangSelect(sel, withAuto, compact = false) {
+  const opts = [];
+  const native = [...LANGS, ...MT_LANGS].find(([c]) => c === detectLang('auto'))?.[1] || 'English';
+  if (withAuto) opts.push(h('option', { value: 'auto' }, `${compact ? 'Auto' : t('langAuto')} · ${native}`));
+  const hand = h('optgroup', { label: '✓' }, ...LANGS.map(([c, n]) => h('option', { value: c }, n)));
+  opts.push(hand);
+  if (hasTranslator()) {
+    opts.push(h('optgroup', { label: `🌐 ${t('langMachine')}` }, ...MT_LANGS.map(([c, n]) => h('option', { value: c }, `${n} · ${t('langMachine')}`))));
+  }
+  sel.replaceChildren(...opts);
+}
+
+let langBusy = null;
+async function refreshLanguage() {
+  const want = detectLang(getSettings().lang);
+  const needsMT = !isHandmade(want);
+  if (needsMT) toast(L('statusTranslatingUi'), 15000);
+  const run = (langBusy = setLang(want, {}));
+  const ok = await run;
+  if (run !== langBusy) return; // a newer switch is in progress
+  if (!ok && needsMT) { toast(L('errMtUnavailable')); saveSettings({ lang: 'auto' }); }
+  else if (needsMT) $('#toast').hidden = true;
+  applyI18n();
+  fillLangSelect($('#langSel'), true, true);
+  $('#langSel').value = getSettings().lang === 'auto' ? 'auto' : getLang();
+  fillLangSelect(field('lang'), true);
+  field('lang').value = getSettings().lang;
+  renderPlatforms();
+  renderBookmarklet();
+  syncQuickOptions();
+  jobs.forEach((job) => { rerenderJob(job); if (job.translated) { job.translated = null; autoTranslateTitle(job); } });
+  if (pickerJob) renderPicker(pickerJob);
+}
+
+function changeLanguage(code) {
+  saveSettings({ lang: code });
+  refreshLanguage();
+}
+
+/* ------------------------------------------------------------------ */
 /* settings                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -460,6 +625,8 @@ function fillSettingsForm(s) {
   field('lang').value = s.lang;
   field('audioFormat').value = s.audioFormat;
   field('autoStart').checked = s.autoStart;
+  field('useFfmpeg').checked = s.useFfmpeg !== false;
+  field('translateTitles').checked = s.translateTitles !== false;
   field('cobalt').value = s.cobalt;
   field('corsProxy').value = s.corsProxy;
   field('piped').value = s.piped;
@@ -468,6 +635,7 @@ function fillSettingsForm(s) {
 
 function openSettings() {
   fillSettingsForm(getSettings());
+  $('#translateRow').hidden = !hasTranslator();
   $('#settingsDlg').showModal();
 }
 
@@ -476,15 +644,6 @@ function syncQuickOptions() {
   document.querySelectorAll('#modeSeg button').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.mode === s.mode)));
   $('#qualitySel').value = s.quality;
   $('#autoChk').checked = s.autoDownload;
-}
-
-function refreshLanguage() {
-  setLang(detectLang(getSettings().lang));
-  applyI18n();
-  $('#langBtn').textContent = getLang().toUpperCase();
-  renderPlatforms();
-  renderBookmarklet();
-  if (pickerJob) renderPicker(pickerJob);
 }
 
 function renderPlatforms() {
@@ -503,7 +662,7 @@ function renderPlatforms() {
 function renderBookmarklet() {
   const base = location.href.split(/[?#]/)[0];
   const code = `javascript:(()=>{window.open(${JSON.stringify(base)}+'?url='+encodeURIComponent(location.href))})()`;
-  const a = h('a', { class: 'bm', href: code, title: 'getvid', onclick: (e) => { e.preventDefault(); toast(t('tipMulti')); } }, 'getvid ⤓');
+  const a = h('a', { class: 'bm', href: code, title: 'getvid', onclick: (e) => { e.preventDefault(); toast(L('bookmarkletDrag')); } }, 'getvid ⤓');
   const [pre, post] = t('bookmarklet', { link: '\u0000' }).split('\u0000');
   $('#bookmarkletLine').replaceChildren(pre, a, post || '');
 }
@@ -520,23 +679,22 @@ function autoGrow() {
 
 function submit(text) {
   const urls = extractUrls(text);
-  if (!urls.length) { toast(t('errNoUrl')); return; }
+  if (!urls.length) { toast(L('errNoUrl')); return; }
   $('#input').value = '';
   autoGrow();
   for (const u of urls) {
     const job = createJob(u);
-    setStatus(job, t('statusDetecting'));
+    setStatus(job, [L('statusDetecting')]);
     schedule(() => runJob(job));
   }
 }
 
-function isEditable(el) {
-  return el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
-}
+const isEditable = (el) => el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
 
-function init() {
+async function init() {
   try { applyTheme(localStorage.getItem(THEME_KEY)); } catch { /* ignore */ }
-  refreshLanguage();
+  // Don't block the page on a (possibly machine-translated) language: handlers attach right away.
+  const langReady = refreshLanguage();
   syncQuickOptions();
 
   const input = $('#input');
@@ -566,7 +724,7 @@ function init() {
       if (getSettings().autoStart && extractUrls(text).length) submit(text);
       else { input.value = text; autoGrow(); input.focus(); }
     } catch {
-      toast(t('clipboardDenied'));
+      toast(L('clipboardDenied'));
       input.focus();
     }
   });
@@ -575,19 +733,19 @@ function init() {
   $('#qualitySel').addEventListener('change', (e) => saveSettings({ quality: e.target.value }));
   $('#autoChk').addEventListener('change', (e) => saveSettings({ autoDownload: e.target.checked }));
 
-  $('#langBtn').addEventListener('click', () => { saveSettings({ lang: getLang() === 'pt' ? 'en' : 'pt' }); refreshLanguage(); });
+  $('#langSel').addEventListener('change', (e) => changeLanguage(e.target.value));
   $('#themeBtn').addEventListener('click', toggleTheme);
   $('#settingsBtn').addEventListener('click', openSettings);
 
-  // dialogs: close buttons + click on backdrop
   document.querySelectorAll('dialog').forEach((d) => {
     d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
     d.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => d.close()));
   });
+  $('#viewer').addEventListener('close', () => $('#viewerMedia').replaceChildren());
   $('#picker').addEventListener('close', () => {
     const job = pickerJob;
     pickerJob = null;
-    if (job && jobs.has(job.id) && !job.ctrl?.signal.aborted && job.ui.sub.hidden) setStatus(job, t('statusWaitingChoice'));
+    if (job && jobs.has(job.id) && !job.ctrl?.signal.aborted && job.ui.sub.hidden) setStatus(job, [L('statusWaitingChoice')]);
     setTimeout(nextPicker, 120);
   });
   $('#selAll').addEventListener('click', () => { if (!pickerJob) return; pickerJob.sel = new Set(pickerJob.result.items.map((_, i) => i)); renderPicker(pickerJob); });
@@ -595,22 +753,25 @@ function init() {
   $('#dlSelBtn').addEventListener('click', () => startPicked(false));
   $('#zipBtn').addEventListener('click', () => startPicked(true));
 
+  // Language picked inside the settings dialog switches instantly too.
+  field('lang').addEventListener('change', (e) => changeLanguage(e.target.value));
   $('#settingsForm').addEventListener('submit', () => {
     saveSettings({
       lang: field('lang').value,
       audioFormat: field('audioFormat').value,
       autoStart: field('autoStart').checked,
+      useFfmpeg: field('useFfmpeg').checked,
+      translateTitles: field('translateTitles').checked,
       cobalt: field('cobalt').value.trim(),
       corsProxy: field('corsProxy').value.trim(),
       piped: field('piped').value.trim(),
       invidious: field('invidious').value.trim(),
     });
     refreshLanguage();
-    toast(t('saved'));
+    toast(L('saved'));
   });
-  $('#resetBtn').addEventListener('click', () => { fillSettingsForm(resetSettings()); syncQuickOptions(); });
+  $('#resetBtn').addEventListener('click', () => { fillSettingsForm(resetSettings()); syncQuickOptions(); refreshLanguage(); });
 
-  // Drag & drop a link anywhere on the page.
   const overlay = $('#dropOverlay');
   let dragDepth = 0;
   const hasText = (e) => [...(e.dataTransfer?.types || [])].some((ty) => ty === 'text/uri-list' || ty === 'text/plain');
@@ -625,7 +786,7 @@ function init() {
     submit(e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain'));
   });
 
-  // Links handed over by the bookmarklet or the mobile share sheet (?url= / ?text=).
+  await langReady;
   const params = new URLSearchParams(location.search);
   const incoming = ['url', 'text', 'title'].map((k) => params.get(k)).filter(Boolean).join('\n');
   if (incoming) {

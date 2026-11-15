@@ -1,9 +1,11 @@
-import { t } from './i18n.js';
+import { L, render } from './i18n.js';
 
+/** Error whose message can be re-rendered in any language (msg may be an L() message). */
 export class ResolveError extends Error {
-  constructor(message, extra = {}) {
-    super(message);
+  constructor(msg, extra = {}) {
+    super(render(msg));
     this.name = 'ResolveError';
+    this.l = msg;
     Object.assign(this, extra);
   }
 }
@@ -11,13 +13,24 @@ export class ResolveError extends Error {
 /** Network failure: offline, DNS, or (most often) blocked by CORS. */
 export class NetError extends ResolveError {
   constructor(url) {
-    super(t('errNetwork', { host: hostOf(url) }), { net: true, url });
+    super(L('errNetwork', { host: hostOf(url) }), { net: true, url });
     this.name = 'NetError';
   }
 }
 
+/** Repair URLs as some APIs return them: "//host/x", "https:https://host/x", "http:/host". */
+export function normUrl(u) {
+  if (!u || typeof u !== 'string') return u;
+  let s = u.trim();
+  if (s.startsWith('//')) return `https:${s}`;
+  s = s.replace(/^(?:https?:\/*)+(?=https?:\/\/)/i, ''); // duplicated scheme
+  s = s.replace(/^(https?):\/?(?!\/)/i, '$1://'); // missing slash
+  return s;
+}
+
 export const hostOf = (u) => { try { return new URL(u).hostname; } catch { return String(u); } };
 export const isUserAbort = (e) => e && e.name === 'AbortError';
+export const errText = (e) => (e && e.l ? e.l : (e?.message || String(e)));
 
 /** Child AbortSignal that also aborts after `ms`. */
 export function withTimeout(parent, ms) {
@@ -36,10 +49,12 @@ export function withTimeout(parent, ms) {
 
 export function mapFetchError(e, url, parent, child) {
   if (parent?.aborted) return parent.reason instanceof Error ? parent.reason : new DOMException('aborted', 'AbortError');
-  if (child.aborted) return new ResolveError(t('errTimeout', { host: hostOf(url) }), { timeout: true, url });
+  if (child?.aborted) return new ResolveError(L('errTimeout', { host: hostOf(url) }), { timeout: true, url });
   if (e instanceof ResolveError) return e;
   return new NetError(url);
 }
+
+const httpError = (status, url) => new ResolveError(L('errHttp', { status, host: hostOf(url) }), { status, url });
 
 /** fetch + JSON parse. Returns { status, ok, data }. Never throws on HTTP status. */
 export async function fetchJsonRaw(url, { signal, timeout = 20000, ...init } = {}) {
@@ -60,8 +75,8 @@ export async function fetchJsonRaw(url, { signal, timeout = 20000, ...init } = {
 /** fetch JSON and throw on HTTP error / invalid JSON. */
 export async function fetchJson(url, opts = {}) {
   const r = await fetchJsonRaw(url, opts);
-  if (!r.ok) throw new ResolveError(t('errHttp', { status: r.status, host: hostOf(url) }), { status: r.status, data: r.data });
-  if (r.data === undefined) throw new ResolveError(t('errBadJson', { host: hostOf(url) }));
+  if (!r.ok) { const e = httpError(r.status, url); e.data = r.data; throw e; }
+  if (r.data === undefined) throw new ResolveError(L('errBadJson', { host: hostOf(url) }));
   return r.data;
 }
 
@@ -69,7 +84,7 @@ export async function fetchText(url, { signal, timeout = 20000, ...init } = {}) 
   const tm = withTimeout(signal, timeout);
   try {
     const res = await fetch(url, { referrerPolicy: 'no-referrer', ...init, signal: tm.signal });
-    if (!res.ok) throw new ResolveError(t('errHttp', { status: res.status, host: hostOf(url) }), { status: res.status });
+    if (!res.ok) throw httpError(res.status, url);
     return { text: await res.text(), type: res.headers.get('content-type') || '', url: res.url || url };
   } catch (e) {
     throw mapFetchError(e, url, signal, tm.signal);
@@ -84,7 +99,7 @@ export async function fetchBytes(url, { signal, timeout = 60000, range } = {}) {
   try {
     const headers = range ? { Range: `bytes=${range.start}-${range.end}` } : undefined;
     const res = await fetch(url, { signal: tm.signal, headers, referrerPolicy: 'no-referrer' });
-    if (!res.ok) throw new ResolveError(t('errHttp', { status: res.status, host: hostOf(url) }), { status: res.status });
+    if (!res.ok) throw httpError(res.status, url);
     return new Uint8Array(await res.arrayBuffer());
   } catch (e) {
     throw mapFetchError(e, url, signal, tm.signal);
@@ -93,46 +108,123 @@ export async function fetchBytes(url, { signal, timeout = 60000, range } = {}) {
   }
 }
 
-/** Streamed download into a Blob with progress callback ({loaded, total}). */
-export async function fetchBlob(url, { signal, onProgress, connectTimeout = 30000 } = {}) {
-  const tm = withTimeout(signal, connectTimeout);
-  let res;
-  try {
-    res = await fetch(url, { signal: tm.signal, redirect: 'follow', referrerPolicy: 'no-referrer' });
-  } catch (e) {
-    tm.done();
-    throw mapFetchError(e, url, signal, tm.signal);
-  }
-  tm.done();
-  if (!res.ok) throw new ResolveError(t('errHttp', { status: res.status, host: hostOf(url) }), { status: res.status });
-  const type = (res.headers.get('content-type') || '').split(';')[0].trim();
-  const total = Number(res.headers.get('content-length')) || 0;
-  const disposition = res.headers.get('content-disposition') || '';
-  if (!res.body || !onProgress) {
-    const blob = await res.blob();
-    return { blob, type, disposition };
-  }
-  const reader = res.body.getReader();
+function readWithIdle(reader, ms, signal) {
+  let timer;
+  return Promise.race([
+    reader.read(),
+    new Promise((_, rej) => { timer = setTimeout(() => rej(new ResolveError('stalled', { stalled: true })), ms); }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Streamed download into a Blob, robust against flaky connections:
+ * retries 5xx/network errors, resumes broken transfers with HTTP Range,
+ * and aborts transfers that stall for `idleTimeout` ms.
+ * onProgress({ loaded, total }).
+ */
+export async function fetchBlob(url, { signal, onProgress, connectTimeout = 30000, idleTimeout = 45000, retries = 4 } = {}) {
   const chunks = [];
-  let loaded = 0;
-  const onAbort = () => reader.cancel().catch(() => {});
-  signal?.addEventListener('abort', onAbort, { once: true });
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (signal?.aborted) throw signal.reason ?? new DOMException('aborted', 'AbortError');
-      if (done) break;
-      chunks.push(value);
-      loaded += value.byteLength;
-      onProgress({ loaded, total });
+  let loaded = 0, total = 0, type = '', disposition = '', attempt = 0;
+  const backoff = () => sleep(Math.min(8000, 700 * 2 ** attempt));
+
+  for (;;) {
+    const tm = withTimeout(signal, connectTimeout);
+    const headers = loaded > 0 ? { Range: `bytes=${loaded}-` } : undefined;
+    let res;
+    try {
+      res = await fetch(url, { signal: tm.signal, headers, redirect: 'follow', referrerPolicy: 'no-referrer' });
+    } catch (e) {
+      tm.done();
+      const err = mapFetchError(e, url, signal, tm.signal);
+      // Resuming after a drop: a failed preflight/network blip deserves another try.
+      if (!isUserAbort(err) && loaded > 0 && attempt < retries) { attempt++; await backoff(); continue; }
+      throw err;
     }
-  } catch (e) {
-    if (signal?.aborted) throw signal.reason ?? e;
-    throw new NetError(url);
-  } finally {
-    signal?.removeEventListener('abort', onAbort);
+    tm.done();
+
+    if (loaded > 0) {
+      if (res.status === 200) { chunks.length = 0; loaded = 0; } // server ignored Range: start over
+      else if (res.status !== 206) {
+        if (attempt < retries && res.status >= 500) { attempt++; await backoff(); continue; }
+        throw httpError(res.status, url);
+      }
+    } else {
+      if (!res.ok) {
+        if (attempt < retries && (res.status >= 500 || res.status === 429)) { attempt++; await backoff(); continue; }
+        throw httpError(res.status, url);
+      }
+      type = (res.headers.get('content-type') || '').split(';')[0].trim();
+      total = Number(res.headers.get('content-length')) || 0;
+      if (res.headers.get('content-encoding')) total = 0; // length is of the compressed body
+      disposition = res.headers.get('content-disposition') || '';
+    }
+
+    if (!res.body) {
+      const b = new Uint8Array(await res.arrayBuffer());
+      chunks.push(b);
+      loaded += b.byteLength;
+      onProgress?.({ loaded, total });
+      break;
+    }
+    const reader = res.body.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await readWithIdle(reader, idleTimeout, signal);
+        if (signal?.aborted) throw signal.reason ?? new DOMException('aborted', 'AbortError');
+        if (done) break;
+        chunks.push(value);
+        loaded += value.byteLength;
+        onProgress?.({ loaded, total });
+      }
+      if (total && loaded < total) throw new ResolveError('truncated');
+      break;
+    } catch (e) {
+      reader.cancel().catch(() => {});
+      if (signal?.aborted) throw signal.reason ?? e;
+      if (attempt < retries) { attempt++; await backoff(); continue; } // resume with Range
+      throw new NetError(url);
+    }
   }
   return { blob: new Blob(chunks, { type: type || 'application/octet-stream' }), type, disposition };
+}
+
+/* ---------------- content sniffing ---------------- */
+
+const ascii = (b, s, e) => String.fromCharCode(...b.subarray(s, e));
+
+/** Identify a file from its first bytes. Returns { ext, mime } or null. */
+export async function sniff(blob) {
+  const b = new Uint8Array(await blob.slice(0, 512).arrayBuffer());
+  if (b.length < 4) return null;
+  const head = ascii(b, 0, Math.min(b.length, 64));
+  if (ascii(b, 4, 8) === 'ftyp') {
+    const brand = ascii(b, 8, 12);
+    if (/^M4A|^M4B|^dash/.test(brand) && !/avc|vide/.test(ascii(b, 0, 512))) return { ext: 'm4a', mime: 'audio/mp4' };
+    if (brand === 'qt  ') return { ext: 'mov', mime: 'video/quicktime' };
+    return { ext: 'mp4', mime: 'video/mp4' };
+  }
+  if (/^(moof|styp|sidx)/.test(ascii(b, 4, 8))) return { ext: 'mp4', mime: 'video/mp4' };
+  if (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) {
+    return /webm/.test(ascii(b, 0, 64)) ? { ext: 'webm', mime: 'video/webm' } : { ext: 'mkv', mime: 'video/x-matroska' };
+  }
+  if (b[0] === 0x47 && (b.length < 189 || b[188] === 0x47)) return { ext: 'ts', mime: 'video/mp2t' };
+  if (head.startsWith('ID3') || (b[0] === 0xff && (b[1] & 0xe6) === 0xe2)) return { ext: 'mp3', mime: 'audio/mpeg' };
+  if (b[0] === 0xff && (b[1] & 0xf6) === 0xf0) return { ext: 'aac', mime: 'audio/aac' };
+  if (head.startsWith('OggS')) return /OpusHead/.test(ascii(b, 0, 64)) ? { ext: 'opus', mime: 'audio/ogg' } : { ext: 'ogg', mime: 'audio/ogg' };
+  if (head.startsWith('fLaC')) return { ext: 'flac', mime: 'audio/flac' };
+  if (head.startsWith('RIFF')) {
+    const k = ascii(b, 8, 12);
+    if (k === 'WAVE') return { ext: 'wav', mime: 'audio/wav' };
+    if (k === 'WEBP') return { ext: 'webp', mime: 'image/webp' };
+    if (k === 'AVI ') return { ext: 'avi', mime: 'video/x-msvideo' };
+  }
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { ext: 'jpg', mime: 'image/jpeg' };
+  if (b[0] === 0x89 && head.slice(1, 4) === 'PNG') return { ext: 'png', mime: 'image/png' };
+  if (head.startsWith('GIF8')) return { ext: 'gif', mime: 'image/gif' };
+  if (head.startsWith('FLV')) return { ext: 'flv', mime: 'video/x-flv' };
+  if (/^\s*(<!doctype html|<html|<head|<body)/i.test(head)) return { ext: 'html', mime: 'text/html' };
+  if (/^\s*#EXTM3U/.test(head)) return { ext: 'm3u8', mime: 'application/vnd.apple.mpegurl' };
+  return null;
 }
 
 /* ---------------- URLs & names ---------------- */
@@ -142,7 +234,6 @@ const BARE_RE = /(?:^|\s)((?:www\.|m\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\/
 
 function trimUrl(u) {
   let s = u.replace(/[),.;:!?'"\]»”]+$/u, '');
-  // keep balanced parentheses (Wikipedia-style URLs)
   const open = (s.match(/\(/g) || []).length;
   const close = (s.match(/\)/g) || []).length;
   if (close < open && u.length > s.length && u[s.length] === ')') s += ')';
@@ -154,7 +245,6 @@ export function extractUrls(text) {
   if (!text) return [];
   const found = [];
   for (const m of text.matchAll(URL_RE)) found.push(trimUrl(m[0]));
-  // Links pasted without a scheme ("youtu.be/xyz"), once full URLs are removed.
   const rest = text.replace(URL_RE, ' ');
   for (const m of rest.matchAll(BARE_RE)) found.push('https://' + trimUrl(m[1]));
   const seen = new Set();
@@ -166,14 +256,17 @@ export function extractUrls(text) {
   });
 }
 
+const WIN_RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i;
+
 export function sanitizeFilename(name, fallback = 'video') {
-  const s = String(name || '')
+  let s = String(name || '')
     .replace(/[\u0000-\u001f\u007f<>:"/\\|?*#]+/g, ' ')
     .replace(/https?\s+\S+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120)
     .replace(/[. ]+$/, '');
+  if (WIN_RESERVED.test(s)) s = `_${s}`;
   return s || fallback;
 }
 
@@ -197,10 +290,7 @@ export function typeFromExt(ext) {
   return '';
 }
 
-export function isMediaUrl(u) {
-  const ext = extFromUrl(u);
-  return !!typeFromExt(ext);
-}
+export const isMediaUrl = (u) => !!typeFromExt(extFromUrl(u));
 
 const MIME_EXT = {
   'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-matroska': 'mkv',
@@ -236,6 +326,14 @@ export function pickVariant(variants, quality) {
   if (quality === 'max') return withP[0];
   const target = parseInt(quality, 10) || 1080;
   return withP.find((v) => v.p <= target) || withP[withP.length - 1];
+}
+
+/** Other variants ordered by closeness to the chosen one (used as fallbacks). */
+export function variantFallbacks(variants, chosen) {
+  if (!variants || variants.length < 2 || !chosen) return [];
+  const rest = variants.filter((v) => v !== chosen && v.url !== chosen.url);
+  if (!chosen.p) return rest;
+  return rest.sort((a, b) => Math.abs((a.p || 0) - chosen.p) - Math.abs((b.p || 0) - chosen.p));
 }
 
 export const shortSide = (w, h) => (w && h ? Math.min(w, h) : (h || w || 0));

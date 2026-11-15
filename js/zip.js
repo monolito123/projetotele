@@ -1,5 +1,6 @@
 // Store-only ZIP writer (no compression — videos are already compressed).
-import { t } from './i18n.js';
+import { L } from './i18n.js';
+import { ResolveError } from './util.js';
 
 const CRC_TABLE = (() => {
   const tbl = new Uint32Array(256);
@@ -40,7 +41,7 @@ export async function makeZip(files) {
     const nameBytes = enc.encode(uniqueName(f.name, used));
     const crc = crc32(new Uint8Array(await f.blob.arrayBuffer()));
     const size = f.blob.size;
-    if (offset + size + 30 + nameBytes.length > 0xffffffff) throw new Error(t('errZipBig'));
+    if (offset + size + 30 + nameBytes.length > 0xffffffff) throw new ResolveError(L('errZipBig'));
 
     const lh = new DataView(new ArrayBuffer(30));
     lh.setUint32(0, 0x04034b50, true);

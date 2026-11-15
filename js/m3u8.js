@@ -1,6 +1,6 @@
 // Minimal in-browser HLS downloader: master/media playlists, byte ranges,
 // fMP4 init segments (EXT-X-MAP) and AES-128 decryption via WebCrypto.
-import { t } from './i18n.js';
+import { L } from './i18n.js';
 import { fetchText, fetchBytes, pickVariant, shortSide, ResolveError, isUserAbort, sleep } from './util.js';
 
 const ATTR_RE = /([A-Z0-9-]+)=("[^"]*"|[^,]*)/g;
@@ -13,7 +13,7 @@ function attrs(s) {
 
 export function parsePlaylist(text, baseUrl) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (!lines.length || !lines[0].startsWith('#EXTM3U')) throw new ResolveError(t('errHlsInvalid'));
+  if (!lines.length || !lines[0].startsWith('#EXTM3U')) throw new ResolveError(L('errHlsInvalid'));
   const out = { isMaster: false, variants: [], media: [], segments: [], ended: false, duration: 0 };
   let pendingVariant = null, key = null, map = null, seq = 0, segIndex = 0, nextRange = null, extinf = 0;
   const rangeEnd = new Map();
@@ -123,13 +123,13 @@ export async function downloadHls(url, { quality = '1080', signal, onProgress, m
     // Without resolution info, prefer the highest bandwidth.
     if (!opts.some((o) => o.p)) opts.sort((a, b) => b.bitrate - a.bitrate);
     const chosen = pickVariant(opts, quality);
-    if (!chosen) throw new ResolveError(t('errHlsInvalid'));
+    if (!chosen) throw new ResolveError(L('errHlsInvalid'));
     codecs = chosen.codecs || '';
     pl = await loadPlaylist(chosen.url, { signal, mapUrl });
   }
   const segs = pl.segments;
-  if (!segs.length) throw new ResolveError(t('errHlsInvalid'));
-  if (segs.some((s) => s.key && s.key.method !== 'AES-128')) throw new ResolveError(t('errHlsDrm'));
+  if (!segs.length) throw new ResolveError(L('errHlsInvalid'));
+  if (segs.some((s) => s.key && s.key.method !== 'AES-128')) throw new ResolveError(L('errHlsDrm'));
 
   const keys = new Map();
   const getKey = (k) => {

@@ -8,6 +8,8 @@ export const DEFAULTS = Object.freeze({
   audioFormat: 'mp3', // best | mp3 | ogg | wav | opus  (cobalt only)
   autoDownload: true,
   autoStart: true,
+  useFfmpeg: true, // merge audio+video / remux / extract audio in the browser (ffmpeg.wasm)
+  translateTitles: true, // on-device translation of post titles (Chrome Translator API)
   // "https://your-cobalt.example.com/" or "https://your-cobalt.example.com/ | API_KEY"
   cobalt: '',
   piped: [
