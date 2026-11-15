@@ -1,6 +1,6 @@
 # getvid: paste a link, the video downloads itself
 
-**Live site:** https://monolito123.github.io/projetotele/ (once GitHub Pages is enabled, see [Publishing](#publishing))
+**Live site:** https://monolito123.github.io/projetotele/
 
 A **frontend-only** video downloader: plain HTML/CSS/JS, no build step and no backend of its own.
 Paste a link (or several). The page works out the platform and finds the media:
@@ -73,13 +73,7 @@ A web page can only read another site if that site allows it (CORS). Instagram, 
 
 ## Publishing
 
-The site is plain static files, and [`.github/workflows/pages.yml`](.github/workflows/pages.yml) copies them to the **`gh-pages`** branch on every push.
-
-To turn the site on (one time):
-
-1. **GitHub Pages on a private repository needs a paid plan** (Pro/Team/Enterprise). On a free account, make the repository public first: *Settings → General → Danger Zone → Change visibility*.
-2. *Settings → Pages → Build and deployment → Source: **Deploy from a branch** → Branch: **`gh-pages`**, folder **`/ (root)`** → Save.*
-3. After about a minute the site is live at **https://monolito123.github.io/projetotele/**.
+The site is plain static files served by **GitHub Pages** from the `gh-pages` branch. [`.github/workflows/pages.yml`](.github/workflows/pages.yml) copies the site files to `gh-pages` on every push to `main` (or the working branch), so the live site updates by itself about a minute after each push. It can also be re-run by hand from the *Actions* tab.
 
 It also works on Netlify, Vercel or Cloudflare Pages (drag and drop the folder). To run it locally, ES modules need HTTP rather than `file://`:
 
