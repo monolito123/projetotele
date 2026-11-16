@@ -77,6 +77,8 @@ For YouTube videos the free servers can't fetch (e.g. region-locked music videos
 
 [`server/`](server/) contains the same kind of backend that download sites use: a single Python file built on **yt-dlp** (1000+ sites). It speaks the cobalt API, so the site uses it as-is, and it's tried before the public pool. Links the browser can't handle (Rumble, Kick, Twitch VODs, Bandcamp…) are sent to it too. Run it on a computer or Android phone at home (residential connections are rarely blocked by YouTube), then paste the address it prints into ⚙ Settings. `--tunnel` gives a free https:// address through Cloudflare. The step-by-step guide (in Portuguese) is in [`server/README.md`](server/README.md).
 
+**Always-on, for every visitor:** [`server/ORACLE.md`](server/ORACLE.md) sets it up on an Oracle Cloud *Always Free* VM. [`server/oracle-setup.sh`](server/oracle-setup.sh) is pasted as the VM's cloud-init script and installs the server, HTTPS (Caddy plus DuckDNS or sslip.io), the YouTube PO-token provider, daily updates, per-visitor rate limits and firewall rules. Then add the address to `PROJECT_SERVERS` in [`js/config.js`](js/config.js), and every visitor uses it before the public pool.
+
 ### Why some platforms need a server
 
 A web page can only read another site if that site allows it (CORS). Instagram, YouTube, Facebook and others don't. That's why there are two optional, self-hosted helpers in [`self-host/`](self-host/):

@@ -1,3 +1,5 @@
+import { PROJECT_SERVERS } from './config.js';
+
 // Persistent per-browser settings (localStorage, wrapped so private mode still works).
 const KEY = 'getvid.settings.v1';
 
@@ -68,13 +70,17 @@ export const PUBLIC_COBALT = [
   { url: 'https://cobaltapi.cjs.nz/', key: '', public: true, prefer: ['facebook'] },
 ];
 
-/** The user's own cobalt servers only. */
+const parseServer = (l) => {
+  const [url, ...rest] = String(l).split('|');
+  return { url: normBase(url.trim()) + '/', key: rest.join('|').trim() };
+};
+
+/** The visitor's own servers, then the servers this site runs (js/config.js). */
 export function ownCobaltInstances(s = current) {
-  return lines(s.cobalt).map((l) => {
-    const [url, ...rest] = l.split('|');
-    const key = rest.join('|').trim();
-    return { url: normBase(url.trim()) + '/', key };
-  }).filter((i) => /^https?:\/\//.test(i.url));
+  const own = lines(s.cobalt).map(parseServer);
+  const project = PROJECT_SERVERS.map(parseServer).map((i) => ({ ...i, project: true }))
+    .filter((p) => !own.some((o) => o.url === p.url));
+  return [...own, ...project].filter((i) => /^https?:\/\//.test(i.url));
 }
 
 /** Own servers first, then (unless disabled) the public pool, ordered for the platform. */

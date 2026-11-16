@@ -20,7 +20,8 @@ Run:   pip install -U "yt-dlp[default]"   &&   python getvid_server.py --tunnel
        (--tunnel starts a free Cloudflare quick tunnel if `cloudflared` is installed and
         prints the https:// address to paste in the site)
 Env:   PORT (9100) · HOST (0.0.0.0) · API_KEY (optional) · ALLOWED_ORIGINS (comma list, or *)
-       TUNNEL=1 (same as --tunnel)
+       TUNNEL=1 (same as --tunnel) · TRUST_PROXY=1 (behind Caddy/nginx) · RATE_LIMIT (30/300)
+       MAX_STREAMS (6) · YTDLP_COOKIES (path to a cookies.txt, optional)
 """
 import json
 import os
@@ -50,12 +51,32 @@ ALLOWED_ORIGINS = [o.strip().rstrip('/') for o in os.environ.get(
     'ALLOWED_ORIGINS',
     'https://monolito123.github.io,http://localhost:8000,http://127.0.0.1:8000,http://localhost:8765,http://127.0.0.1:8765',
 ).split(',') if o.strip()]
+TRUST_PROXY = os.environ.get('TRUST_PROXY') == '1'  # behind Caddy/nginx: client IP from X-Forwarded-For
+# Requests per IP: "20/300" = 20 link lookups every 300 s (downloads themselves aren't counted).
+_rl = os.environ.get('RATE_LIMIT', '30/300').split('/')
+RATE_MAX, RATE_WINDOW = int(_rl[0]), int(_rl[1] if len(_rl) > 1 else 300)
+MAX_STREAMS = int(os.environ.get('MAX_STREAMS', '6'))  # simultaneous downloads (protects small VMs)
+COOKIES = os.environ.get('YTDLP_COOKIES', '').strip()  # optional Netscape cookies file for sites that demand login
 TUNNEL_TTL = 60 * 60  # seconds a download link stays valid
 CHUNK = 10 * 1024 * 1024  # upstream range size (avoids per-connection throttling)
 HAS_FFMPEG = shutil.which('ffmpeg') is not None
 
 TUNNELS = {}
 LOCK = threading.Lock()
+HITS = {}
+STREAMS = threading.BoundedSemaphore(MAX_STREAMS)
+
+
+def rate_ok(ip):
+    now = time.time()
+    with LOCK:
+        recent = [t for t in HITS.get(ip, []) if now - t < RATE_WINDOW]
+        if len(recent) >= RATE_MAX:
+            HITS[ip] = recent
+            return False
+        recent.append(now)
+        HITS[ip] = recent
+        return True
 
 
 def log(*a):
@@ -110,10 +131,14 @@ def cleanup_loop():
         with LOCK:
             for k in [k for k, v in TUNNELS.items() if v['exp'] < now]:
                 TUNNELS.pop(k, None)
+            for ip in [ip for ip, ts in HITS.items() if not ts or now - ts[-1] > RATE_WINDOW]:
+                HITS.pop(ip, None)
 
 
 def ydl_opts(extra=None):
     o = {'quiet': True, 'no_warnings': True, 'noplaylist': True, 'skip_download': True, 'socket_timeout': 20}
+    if COOKIES and os.path.isfile(COOKIES):
+        o['cookiefile'] = COOKIES
     if extra:
         o.update(extra)
     return o
@@ -246,6 +271,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    def client_ip(self):
+        if TRUST_PROXY:
+            fwd = (self.headers.get('X-Forwarded-For') or '').split(',')[0].strip()
+            if fwd:
+                return fwd
+        return self.client_address[0]
+
     def origin_ok(self):
         origin = (self.headers.get('Origin') or '').rstrip('/')
         if not origin:
@@ -299,15 +331,25 @@ class Handler(BaseHTTPRequestHandler):
                 t = TUNNELS.get(tid)
             if not t or t['exp'] < time.time():
                 return self.send_json(404, {'status': 'error', 'error': {'code': 'error.tunnel.expired'}}, origin)
+            if not STREAMS.acquire(timeout=30):
+                return self.send_json(503, {'status': 'error', 'error': {'code': 'error.api.busy'}}, origin)
             try:
                 if t['kind'] == 'url':
                     return self.proxy(t, origin)
                 return self.ytdlp_stream(t, origin)
             except (BrokenPipeError, ConnectionResetError):
                 return
+            finally:
+                STREAMS.release()
         self.send_json(404, {'status': 'error', 'error': {'code': 'error.api.not_found'}}, origin)
 
     def do_POST(self):
+        # Always consume the body first: refusing early with unread bytes would corrupt the
+        # next request on a kept-alive connection (e.g. behind Caddy).
+        length = int(self.headers.get('Content-Length') or 0)
+        raw = self.rfile.read(min(length, 65536)) if length > 0 else b''
+        if length > 65536:
+            self.close_connection = True
         origin = self.origin_ok()
         if origin is None:
             return self.send_json(403, {'status': 'error', 'error': {'code': 'error.api.origin'}}, None)
@@ -315,8 +357,10 @@ class Handler(BaseHTTPRequestHandler):
             auth = self.headers.get('Authorization') or ''
             if auth not in (f'Api-Key {API_KEY}', f'Bearer {API_KEY}'):
                 return self.send_json(401, {'status': 'error', 'error': {'code': 'error.api.auth.key.invalid'}}, origin)
+        if not rate_ok(self.client_ip()):
+            return self.send_json(429, {'status': 'error', 'error': {'code': 'error.api.rate_exceeded'}}, origin)
         try:
-            body = json.loads(self.rfile.read(int(self.headers.get('Content-Length') or 0)) or b'{}')
+            body = json.loads(raw or b'{}')
         except ValueError:
             return self.send_json(400, {'status': 'error', 'error': {'code': 'error.api.invalid_body'}}, origin)
         started = time.time()

@@ -1,5 +1,7 @@
 # Servidor getvid (yt-dlp)
 
+> **Quer um servidor grátis, ligado 24 h e usado pelo site para todos?** Siga o guia da **[Oracle Cloud Always Free](ORACLE.md)**: você cola um script e a máquina se configura sozinha.
+
 Sites como y2mate e savefrom funcionam porque têm **um servidor** que baixa o vídeo e repassa para você. O YouTube não deixa um site sem servidor fazer isso. Este é o servidor do getvid, feito com o **yt-dlp**, que suporta mais de 1.000 sites (YouTube, Instagram, Facebook, Vimeo, Twitch, SoundCloud, Rumble, Kick…).
 
 **Melhor lugar para rodar:** um computador ou celular **na sua casa, no Brasil**. O YouTube bloqueia muitos servidores de nuvem. A sua conexão de casa é tratada como um usuário normal, e vídeos que só podem ser vistos no Brasil também funcionam.
