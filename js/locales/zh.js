@@ -119,6 +119,7 @@ export default {
   publicCobaltHelp: '由社区运营的服务器，无需任何设置即可下载 YouTube、Instagram、Facebook 等。它们可能较慢或繁忙；自建服务器更可靠。',
   errPublicFailed: '免费公共服务器目前无法下载此内容（可能是私密、受地区限制或被屏蔽）。请稍后重试，或在 ⚙ 中添加你自己的 cobalt 服务器。',
   errEmptyFile: '服务器发送了一个空文件。',
+  serverGuide: '如何搭建自己的服务器（免费）',
   errConvert: '转换失败，已保存原始文件。',
   errMtUnavailable: '此浏览器不支持自动翻译成该语言。',
   redditSplit: 'Reddit 将音频和视频分开存储。在 ⚙ 中开启转换器（或使用 cobalt）即可得到单个文件。',

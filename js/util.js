@@ -261,6 +261,8 @@ const WIN_RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i;
 export function sanitizeFilename(name, fallback = 'video') {
   let s = String(name || '')
     .replace(/[\u0000-\u001f\u007f<>:"/\\|?*#]+/g, ' ')
+    // Keep letters, marks, digits, punctuation and spaces; Chrome renames files with odd symbols to "download".
+    .replace(/[^\p{L}\p{M}\p{N}\p{P}\p{Zs}]+/gu, ' ')
     .replace(/https?\s+\S+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

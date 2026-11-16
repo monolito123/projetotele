@@ -119,6 +119,7 @@ export default {
   publicCobaltHelp: 'YouTube, Instagram, Facebook ve diğerlerini kurulum gerektirmeden açan topluluk sunucuları. Yavaş ya da yoğun olabilirler; kendi sunucun daha güvenilirdir.',
   errPublicFailed: 'Ücretsiz herkese açık sunucular bunu şu anda indiremedi (gizli, bölgesel olarak engelli ya da onlara kapalı olabilir). Daha sonra tekrar dene veya ⚙ içinden kendi cobalt sunucunu ekle.',
   errEmptyFile: 'Sunucu boş bir dosya gönderdi.',
+  serverGuide: 'Kendi sunucunu kur (ücretsiz)',
   errConvert: 'Dönüştürme başarısız oldu, bu yüzden orijinal dosya kaydedildi.',
   errMtUnavailable: 'Bu dile otomatik çeviri bu tarayıcıda kullanılamıyor.',
   redditSplit: 'Reddit sesi ve videoyu ayrı saklar. Tek dosya almak için ⚙ içinden dönüştürücüyü aç (ya da cobalt kullan).',

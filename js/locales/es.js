@@ -119,6 +119,7 @@ export default {
   publicCobaltHelp: 'Servidores mantenidos por la comunidad que habilitan YouTube, Instagram, Facebook y más sin configurar nada. Pueden ir lentos u ocupados; un servidor propio es más fiable.',
   errPublicFailed: 'Los servidores públicos gratuitos no pudieron descargar esto ahora (puede ser privado, estar bloqueado en tu región o para ellos). Inténtalo más tarde o agrega tu propio servidor cobalt en ⚙.',
   errEmptyFile: 'El servidor envió un archivo vacío.',
+  serverGuide: 'Cómo crear tu propio servidor (gratis)',
   errConvert: 'La conversión falló, así que se guardó el archivo original.',
   errMtUnavailable: 'La traducción automática a este idioma no está disponible en este navegador.',
   redditSplit: 'Reddit guarda el audio y el video por separado. Activa el conversor en ⚙ (o usa cobalt) para obtener un solo archivo.',

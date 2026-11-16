@@ -119,6 +119,7 @@ export default {
   publicCobaltHelp: 'Server yang dikelola komunitas untuk membuka YouTube, Instagram, Facebook, dan lainnya tanpa pengaturan. Bisa lambat atau sibuk; server sendiri lebih andal.',
   errPublicFailed: 'Server publik gratis tidak bisa mengunduh ini sekarang (mungkin privat, dibatasi wilayah, atau diblokir untuk mereka). Coba lagi nanti, atau tambahkan server cobalt milikmu di ⚙.',
   errEmptyFile: 'Server mengirim file kosong.',
+  serverGuide: 'Cara membuat server sendiri (gratis)',
   errConvert: 'Konversi gagal, jadi file asli yang disimpan.',
   errMtUnavailable: 'Terjemahan otomatis ke bahasa ini tidak tersedia di browser ini.',
   redditSplit: 'Reddit menyimpan audio dan video terpisah. Aktifkan konverter di ⚙ (atau pakai cobalt) untuk mendapat satu file.',

@@ -5,7 +5,7 @@ name: Publish site (gh-pages)
 on:
   push:
     branches: [main, ccr-7a4345da-w1un2r]
-    paths-ignore: ['**.md', 'self-host/**', '*.zip']
+    paths-ignore: ['**.md', 'self-host/**', '*.zip', 'server/Dockerfile', 'server/docker-compose.yml']
   workflow_dispatch:
 
 permissions:
@@ -25,6 +25,7 @@ jobs:
         run: |
           mkdir _site
           cp -r index.html manifest.webmanifest icon.svg .nojekyll css js vendor _site/
+          mkdir -p _site/server && cp server/getvid_server.py _site/server/
 
       - name: Push to gh-pages
         env:

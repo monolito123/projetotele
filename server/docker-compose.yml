@@ -1,0 +1,15 @@
+# getvid server + a free Cloudflare quick tunnel (no account needed).
+#   docker compose up -d
+#   docker compose logs tunnel | grep trycloudflare      ← the https:// address to paste in the site
+services:
+  getvid:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.5
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://getvid:9100
+    depends_on:
+      - getvid

@@ -176,6 +176,8 @@ function rerenderJob(job) {
   paintTitle(job);
 }
 
+const SERVER_GUIDE = 'https://github.com/monolito123/projetotele/blob/ccr-7a4345da-w1un2r/server/README.md';
+const guideBtn = () => h('a', { class: 'btn ghost', href: SERVER_GUIDE, target: '_blank', rel: 'noopener' }, t('serverGuide'));
 const btn = (label, onclick, kind = 'ghost') => h('button', { type: 'button', class: `btn ${kind}`, onclick }, label);
 const linkBtn = (label, href, filename, kind = 'primary') => h('a', { class: `btn ${kind}`, href, target: '_blank', rel: 'noopener noreferrer', download: filename || true }, label);
 const cancelBtn = (job) => btn(t('cancel'), () => job.ctrl?.abort());
@@ -308,6 +310,7 @@ function showError(job, e) {
   setActions(job, () => [
     e.needsCobalt ? btn(`⚙ ${t('settings')}`, openSettings, 'primary') : null,
     e.fatal ? null : btn(t('retry'), () => runJob(job), e.needsCobalt ? 'ghost' : 'primary'),
+    e.needsCobalt ? guideBtn() : null,
   ]);
 }
 
@@ -375,7 +378,7 @@ function singleActions(job) {
   if (job.file && canShareFiles() && navigator.canShare({ files: [job.file] })) {
     acts.push(btn(`⤴ ${t('shareSave')}`, () => navigator.share({ files: [job.file], title: job.file.name }).catch(() => {}), 'primary'));
   }
-  if (job.needsSettings) acts.push(btn(`⚙ ${t('settings')}`, openSettings, 'primary'));
+  if (job.needsSettings) acts.push(btn(`⚙ ${t('settings')}`, openSettings, 'primary'), guideBtn());
   acts.push(btn(job.done ? t('again') : job.needsSettings ? t('retry') : t('download'), () => downloadSingle(job, item), job.done || job.manual || job.needsSettings ? 'ghost' : 'primary'));
   const vars = item.variants || [];
   if (vars.length > 1) vars.slice(0, 8).forEach((v) => acts.push(btn(render(v.label) || '?', () => downloadSingle(job, item, v))));

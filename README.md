@@ -68,6 +68,10 @@ Each link goes through a chain of resolvers. The first one that works wins. If n
 
 Out of the box, platforms that need a server (YouTube, Instagram, Facebook…) go through a small pool of **free community-run cobalt servers** that accept requests from any website. They're listed in `PUBLIC_COBALT` in [`js/settings.js`](js/settings.js) and can be switched off in ⚙ Settings. If one server fails (busy, blocked, or sends an empty file), the next one is tried automatically. These servers are run by volunteers. They can be slow, change, or be blocked by a platform for a given video. Your own server (below) is the reliable option.
 
+### Your own server: getvid-server (yt-dlp)
+
+[`server/`](server/) contains the same kind of backend that download sites use: a single Python file built on **yt-dlp** (1000+ sites). It speaks the cobalt API, so the site uses it as-is, and it's tried before the public pool. Links the browser can't handle (Rumble, Kick, Twitch VODs, Bandcamp…) are sent to it too. Run it on a computer or Android phone at home (residential connections are rarely blocked by YouTube), then paste the address it prints into ⚙ Settings. `--tunnel` gives a free https:// address through Cloudflare. The step-by-step guide (in Portuguese) is in [`server/README.md`](server/README.md).
+
 ### Why some platforms need a server
 
 A web page can only read another site if that site allows it (CORS). Instagram, YouTube, Facebook and others don't. That's why there are two optional, self-hosted helpers in [`self-host/`](self-host/):
@@ -112,6 +116,7 @@ js/m3u8.js               HLS playlist parser + segment downloader (AES-128, fMP4
 js/util.js               resumable fetch, file sniffing, helpers
 js/zip.js                store-only ZIP writer
 vendor/ffmpeg/           @ffmpeg/ffmpeg 0.12.15 (MIT), unmodified
+server/                  getvid-server: yt-dlp backend (Python, Docker, Cloudflare quick tunnel)
 self-host/               cobalt docker-compose + CORS proxy worker
 .github/workflows/       GitHub Pages publishing
 ```

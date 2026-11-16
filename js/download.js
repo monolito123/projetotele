@@ -165,6 +165,7 @@ async function postProcess(item, got, { settings, signal, onProgress }) {
     warning = L('errConvert');
   }
   const named = { ...item, type };
+  if (ext === 'mp4' && (type === 'audio' || item.type === 'audio') && !item.audio) ext = 'm4a'; // audio-only MP4
   const disp = filenameFromDisposition(got.disposition);
   const filename = !item.name && !item.filename && disp ? sanitizeFilename(disp) : buildFilename(named, ext);
   return { blob, filename, warning, extras };

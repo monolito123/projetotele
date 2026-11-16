@@ -657,7 +657,9 @@ async function cobaltRequest(inst, link, s, signal) {
     }
     case 'picker': {
       const items = (d.picker || []).map((p, i) => ({
-        type: p.type === 'photo' ? 'photo' : p.type === 'gif' ? 'gif' : 'video', kind: 'file', url: p.url, thumb: p.thumb, name: `${base}_${i + 1}`, final: true,
+        type: p.type === 'photo' ? 'photo' : p.type === 'gif' ? 'gif' : p.type === 'audio' ? 'audio' : 'video',
+        kind: 'file', url: p.url, thumb: p.thumb, final: true,
+        name: p.filename ? stripExt(String(p.filename)) : `${base}_${i + 1}`, // getvid-server sends titles
       }));
       if (d.audio) items.push({ type: 'audio', kind: 'file', url: d.audio, filename: d.audioFilename, name: `${base}_audio`, attachment: true });
       return { title: base, items };
@@ -685,7 +687,9 @@ async function cobaltRequest(inst, link, s, signal) {
 
 R.cobalt = async ({ url, settings, signal, platform, cobaltExclude = [] }) => {
   let last;
-  for (const inst of cobaltInstances(settings, platform?.id).filter((i) => !cobaltExclude.includes(i.url))) {
+  // Sites cobalt doesn't list go only to the user's own servers (e.g. a yt-dlp based getvid-server).
+  const pool = platform && !platform.resolvers.includes('cobalt') ? ownCobaltInstances(settings) : cobaltInstances(settings, platform?.id);
+  for (const inst of pool.filter((i) => !cobaltExclude.includes(i.url))) {
     try {
       const res = await cobaltRequest(inst, url.href, settings, signal);
       // Remember which server produced the files, so a failed download can move on to the next one.
@@ -959,6 +963,8 @@ export async function resolve(raw, { settings, signal, onStatus, depth = 0, only
 
   let chain = [...platform.resolvers];
   if (isMediaUrl(url.href) && !NO_DIRECT_SHORTCUT.has(platform.id)) chain.unshift('direct');
+  // Your own server (getvid-server / cobalt) also gets every link the browser can't handle itself.
+  if (!chain.includes('cobalt') && ownCobaltInstances(settings).length) chain.push('cobalt');
   if (!noGeneric) chain.push('generic');
   chain = only ? [only] : [...new Set(chain)].filter((n) => !skip.includes(n));
 

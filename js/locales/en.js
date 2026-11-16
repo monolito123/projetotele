@@ -119,6 +119,7 @@ export default {
   publicCobaltHelp: 'Community-run servers that unlock YouTube, Instagram, Facebook and more with no setup. They can be slow or busy; your own server is more reliable.',
   errPublicFailed: 'The free public servers couldn’t download this right now (it may be private, region-locked or blocked for them). Try again later, or add your own cobalt server in ⚙.',
   errEmptyFile: 'The server sent an empty file.',
+  serverGuide: 'How to set up your own server (free)',
   errConvert: 'Conversion failed, so the original file was saved.',
   errMtUnavailable: 'Automatic translation into this language is not available in this browser.',
   redditSplit: 'Reddit stores audio and video separately. Turn on the converter in ⚙ (or use cobalt) to get a single file.',
