@@ -11,13 +11,14 @@ import { mergeAV, remuxToMp4, extractAudio, stripAudio } from './ffmpeg.js';
 
 /** Every candidate was blocked by CORS: the user has to open the link themselves. */
 export class ManualDownload extends ResolveError {
-  constructor(url, filename, attachment, type) {
+  constructor(url, filename, attachment, type, openPlayer = false) {
     super(L('statusManual'));
     this.name = 'ManualDownload';
     this.url = url;
     this.filename = filename;
     this.attachment = attachment;
     this.type = type;
+    this.openPlayer = openPlayer; // open the player right away
   }
 }
 
@@ -180,6 +181,8 @@ async function postProcess(item, got, { settings, signal, onProgress }) {
  */
 export async function fetchItem(item, { settings, signal, onProgress, variant } = {}) {
   item = await concretize(item, { settings, signal });
+  // Known to be unfetchable from a page (e.g. Instagram Reels via redirect): go straight to the player.
+  if (item.playerOnly) throw new ManualDownload(item.url, buildFilename(item, item.ext || 'mp4'), false, item.type, true);
   // Audio-only and the source has a separate audio track: skip the video entirely.
   if (settings.mode === 'audio' && item.audio && !item.final && canMerge(settings)) {
     item = { ...item, ...item.audio, type: 'audio', variants: undefined, audio: undefined, ext: item.audio.ext || 'm4a' };

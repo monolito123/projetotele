@@ -60,7 +60,8 @@ Each link goes through a chain of resolvers. The first one that works wins. If n
 | **Direct files** (`.mp4 .webm .mov .mp3 .jpg…`) | fetched directly | ✅ |
 | **HLS streams** (`.m3u8`) | built-in downloader: quality, AES-128, fMP4, separate audio | ✅ |
 | **YouTube** (videos, Shorts, playlists) | cobalt (free public servers, or yours) → Piped → Invidious → loader.to button | ✅ automatic for most videos; the rest through the loader.to button (one tap, ads) |
-| **Instagram, Facebook, Vimeo, Dailymotion, Twitch clips, SoundCloud, Tumblr, Snapchat, Bilibili, Loom, Newgrounds, OK.ru, VK, Rutube, Medal, Xiaohongshu** | cobalt (free public servers, or yours) | ⚠️ best-effort on the public servers; reliable with your own |
+| **Instagram** (Reels, videos, photos, carousels) | cobalt (free public servers, or yours) → Instagram player (eeinstagram/uuinstagram) | ✅ posts and carousels download directly; Reels the servers only return as a cover open in the built-in player to save |
+| **Facebook, Vimeo, Dailymotion, Twitch clips, SoundCloud, Tumblr, Snapchat, Bilibili, Loom, Newgrounds, OK.ru, VK, Rutube, Medal, Xiaohongshu** | cobalt (free public servers, or yours) | ⚠️ best-effort on the public servers; reliable with your own |
 | **Threads, Telegram, Kick, Rumble, LinkedIn, Kwai, Coub, any other site** | page scan (og:video, `<video>`, JSON-LD, raw media URLs, embedded players) | 🔧 usually needs the CORS proxy |
 | Netflix, Prime Video, Disney+, Spotify… | refused (DRM) | ❌ |
 

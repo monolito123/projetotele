@@ -24,6 +24,7 @@ export const LABELS = {
   imgur: 'Imgur', ninegag: '9GAG', dropbox: 'Dropbox', gdrive: 'Google Drive', telegram: 'Telegram',
   piped: 'Piped', invidious: 'Invidious', cobalt: 'cobalt', generic: 'page scan',
   odysee: 'Odysee API', pinterest: 'Pinterest API', misskey: 'Misskey API', lemmy: 'Lemmy API',
+  instafix: 'Instagram player',
 };
 
 /** Whether separate audio/video can be merged in this browser with the user's settings. */
@@ -685,6 +686,96 @@ async function cobaltRequest(inst, link, s, signal) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Instagram: real video for Reels that servers only return as a cover */
+/* ------------------------------------------------------------------ */
+
+const igId = (url) => url.pathname.match(/\/(?:p|reels?|tv)\/([\w-]{5,})/)?.[1];
+const igIsVideoLink = (url) => /\/(?:reels?|tv)\//.test(url.pathname);
+// Embed-fixer services (like FxTwitter for X) that redirect to the post's video on Instagram's CDN.
+const IG_VIDEO = [(id) => `https://eeinstagram.com/videos/${id}/1`, (id) => `https://uuinstagram.com/videos/${id}/1`];
+
+/**
+ * Does this URL play as a video? A <video> element follows redirects without needing CORS,
+ * so it works where fetch() can't. Resolves { w, h, duration } or null.
+ */
+function probeVideo(src, ms = 9000) {
+  return new Promise((resolve) => {
+    if (typeof document === 'undefined') { resolve(null); return; }
+    const v = document.createElement('video');
+    let done = false;
+    const finish = (r) => { if (done) return; done = true; clearTimeout(timer); v.removeAttribute('src'); v.load(); v.remove(); resolve(r); };
+    const timer = setTimeout(() => finish(null), ms);
+    v.muted = true;
+    v.preload = 'metadata';
+    v.setAttribute('referrerpolicy', 'no-referrer');
+    v.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none';
+    v.onloadedmetadata = () => finish(v.videoWidth ? { w: v.videoWidth, h: v.videoHeight, duration: v.duration } : null);
+    v.onerror = () => finish(null);
+    v.src = src;
+    document.body.append(v);
+  });
+}
+
+/** Does this URL load as an image? (<img> also follows redirects without CORS.) */
+function probeImage(src, ms = 9000) {
+  return new Promise((resolve) => {
+    if (typeof Image === 'undefined') { resolve(false); return; }
+    const img = new Image();
+    let done = false;
+    const finish = (r) => { if (done) return; done = true; clearTimeout(timer); img.src = ''; resolve(r); };
+    const timer = setTimeout(() => finish(false), ms);
+    img.referrerPolicy = 'no-referrer';
+    img.onload = () => finish(img.naturalWidth > 0);
+    img.onerror = () => finish(false);
+    img.src = src;
+  });
+}
+
+async function igVideo(id) {
+  for (const make of IG_VIDEO) {
+    const src = make(id);
+    const meta = await probeVideo(src);
+    if (meta) return { src, meta };
+  }
+  return null;
+}
+
+R.instafix = async ({ url }) => {
+  const id = igId(url);
+  if (!id) throw bad();
+  // Reels and single-video posts: the common case, answered by the first probe.
+  const found = await igVideo(id);
+  if (found) {
+    return {
+      title: `instagram_${id}`,
+      items: [{
+        type: 'video', kind: 'file', url: found.src, ext: 'mp4', name: `instagram_${id}`, duration: found.meta.duration,
+        thumb: `https://eeinstagram.com/images/${id}/1`,
+        // Instagram's CDN can't be fetched through these redirects, but it plays: save it from the player.
+        playerOnly: true,
+      }],
+    };
+  }
+  // Photos and carousels: every slide has an image (the cover, for videos) and maybe a video.
+  const slides = await Promise.all(Array.from({ length: 12 }, async (_, i) => {
+    const n = i + 1;
+    const img = `https://eeinstagram.com/images/${id}/${n}`;
+    const [isImg, vid] = await Promise.all([probeImage(img), probeVideo(`https://eeinstagram.com/videos/${id}/${n}`)]);
+    return isImg ? { n, img, vid } : null;
+  }));
+  const items = [];
+  for (const sl of slides) {
+    if (!sl) break; // past the last slide
+    const name = `instagram_${id}${slides.filter(Boolean).length > 1 ? `_${sl.n}` : ''}`;
+    items.push(sl.vid
+      ? { type: 'video', kind: 'file', url: `https://eeinstagram.com/videos/${id}/${sl.n}`, ext: 'mp4', name, thumb: sl.img, duration: sl.vid.duration, playerOnly: true }
+      : { type: 'photo', kind: 'file', url: sl.img, ext: 'jpg', name, thumb: sl.img, playerOnly: true });
+  }
+  if (!items.length) throw none();
+  return { title: `instagram_${id}`, items };
+};
+
 R.cobalt = async ({ url, settings, signal, platform, cobaltExclude = [] }) => {
   let last;
   // Sites cobalt doesn't list go only to the user's own servers (e.g. a yt-dlp based getvid-server).
@@ -692,6 +783,13 @@ R.cobalt = async ({ url, settings, signal, platform, cobaltExclude = [] }) => {
   for (const inst of pool.filter((i) => !cobaltExclude.includes(i.url))) {
     try {
       const res = await cobaltRequest(inst, url.href, settings, signal);
+      // Instagram often gives anonymous servers only the cover image of a Reel/video: don't accept that.
+      if (platform?.id === 'instagram' && res.items.length === 1 && res.items[0].type === 'photo' && settings.mode !== 'audio') {
+        const id = igId(url);
+        if (igIsVideoLink(url) || (id && await probeVideo(IG_VIDEO[0](id), 7000))) {
+          throw new ResolveError('cover image only (Instagram hides the video from this server)');
+        }
+      }
       // Remember which server produced the files, so a failed download can move on to the next one.
       res.items.forEach((it) => { it.cobaltInst = inst.url; it.cobaltPublic = !!inst.public; });
       return res;

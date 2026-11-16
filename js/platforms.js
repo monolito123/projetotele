@@ -8,7 +8,7 @@ const P = (id, name, color, hosts, resolvers, extra = {}) => ({ id, name, color,
 export const PLATFORMS = [
   P('youtube', 'YouTube', '#ff0033', ['youtube.com', 'youtu.be', 'youtube-nocookie.com'], ['cobalt', 'piped', 'invidious']),
   P('tiktok', 'TikTok', '#25f4ee', ['tiktok.com'], ['tikwm', 'cobalt']),
-  P('instagram', 'Instagram', '#e1306c', ['instagram.com', 'instagr.am', 'ddinstagram.com'], ['cobalt']),
+  P('instagram', 'Instagram', '#e1306c', ['instagram.com', 'instagr.am', 'ddinstagram.com'], ['cobalt', 'instafix']),
   P('facebook', 'Facebook', '#1877f2', ['facebook.com', 'fb.watch', 'fb.com'], ['cobalt']),
   P('twitter', 'X / Twitter', '#a3a3a3', ['x.com', 'twitter.com', 'fxtwitter.com', 'fixupx.com', 'vxtwitter.com', 'fixvx.com', 'twittpr.com', 'nitter.net', 'xcancel.com'], ['fxtwitter', 'vxtwitter', 'cobalt']),
   P('reddit', 'Reddit', '#ff4500', ['reddit.com', 'redd.it', 'redditmedia.com'], ['cobalt', 'reddit']),

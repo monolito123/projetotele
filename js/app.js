@@ -407,6 +407,7 @@ async function downloadSingle(job, item, variant) {
         job.manual = e;
         setBar(job, 'hide');
         setStatus(job, [L('statusManual')], 'warn');
+        if (e.openPlayer && !$('#viewer').open && !$('#picker').open) openViewer(e);
       }
     } else if (isUserAbort(e) || signal.aborted) {
       setBar(job, 'hide');
