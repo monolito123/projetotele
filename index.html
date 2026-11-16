@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>getvid — Video Downloader</title>
+  <meta name="description" content="Cole o link e o vídeo baixa sozinho. YouTube, TikTok, Instagram, X, Reddit, Bluesky e mais de 40 sites, direto no navegador.">
+  <meta name="theme-color" content="#0b0d14">
+  <!-- Several video CDNs (e.g. X/Twitter) reject requests that carry a foreign Referer. -->
+  <meta name="referrer" content="no-referrer">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <script>
+    /* Phone showing the desktop version ("Desktop site" on, or an in-app browser that ignores
+       the mobile viewport): zoom the page so its layout width matches the phone's real width. */
+    (function () {
+      function fit() {
+        var d = document.documentElement;
+        try {
+          var touch = matchMedia('(pointer: coarse)').matches || matchMedia('(any-pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+          var sw = screen.width, phone = Math.min(screen.width, screen.height) <= 600;
+          d.style.zoom = '';
+          var lw = d.clientWidth || window.innerWidth;
+          if (touch && phone && sw > 0 && lw > sw * 1.3) {
+            var z = lw / sw;
+            d.style.zoom = z;
+            d.classList.add('phone-zoom');
+            d.style.setProperty('--vw', sw + 'px');
+            d.style.setProperty('--vh', Math.round((window.innerHeight || screen.height) / z) + 'px');
+          } else {
+            d.classList.remove('phone-zoom');
+            d.style.removeProperty('--vw');
+            d.style.removeProperty('--vh');
+          }
+        } catch (e) { /* never block the page */ }
+      }
+      fit();
+      var t;
+      window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(fit, 150); });
+    })();
+  </script>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div class="glow" aria-hidden="true"></div>
+
+  <div class="page">
+  <header class="topbar">
+    <a class="brand" href="./">
+      <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c6cff"/><stop offset="1" stop-color="#ff4fa3"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#lg)"/><path d="M16 8v12m0 0-5-5m5 5 5-5M10 24h12" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>getvid</span>
+    </a>
+    <nav class="top-actions">
+      <button id="themeBtn" class="icon-btn" type="button" data-i18n-title="theme">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </button>
+      <label class="lang-pick" data-i18n-title="language">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3 12h18M12 3c2.6 2.6 3.9 5.6 3.9 9s-1.3 6.4-3.9 9c-2.6-2.6-3.9-5.6-3.9-9S9.4 5.6 12 3Z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+        <select id="langSel" aria-label="Language"></select>
+      </label>
+      <button id="settingsBtn" class="icon-btn" type="button" data-i18n-title="settings">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      </button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1 data-i18n="tagline">Cole o link. O vídeo baixa sozinho.</h1>
+      <p class="sub" data-i18n="sub"></p>
+
+      <form id="form" class="paste-box" autocomplete="off">
+        <svg class="link-ico" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <textarea id="input" rows="1" data-i18n-ph="placeholder" spellcheck="false" autocapitalize="off" autofocus aria-label="URL"></textarea>
+        <div class="box-actions">
+          <button type="button" id="pasteBtn" class="btn ghost">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M9 4h6v3H9zM8 5H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            <span data-i18n="paste">Colar</span>
+          </button>
+          <button type="submit" id="goBtn" class="btn primary">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span data-i18n="download">Baixar</span>
+          </button>
+        </div>
+      </form>
+
+      <div class="options">
+        <div class="seg" role="radiogroup" id="modeSeg">
+          <button type="button" role="radio" data-mode="auto" data-i18n="modeVideo">Vídeo</button>
+          <button type="button" role="radio" data-mode="audio" data-i18n="modeAudio">Só áudio</button>
+          <button type="button" role="radio" data-mode="mute" data-i18n="modeMute">Sem som</button>
+        </div>
+        <label class="field-inline">
+          <span data-i18n="quality">Qualidade</span>
+          <select id="qualitySel">
+            <option value="max" data-i18n="best">Máxima</option>
+            <option value="2160">4K (2160p)</option>
+            <option value="1440">1440p</option>
+            <option value="1080">1080p</option>
+            <option value="720">720p</option>
+            <option value="480">480p</option>
+            <option value="360">360p</option>
+            <option value="240">240p</option>
+          </select>
+        </label>
+        <label class="toggle">
+          <input type="checkbox" id="autoChk">
+          <span class="track" aria-hidden="true"></span>
+          <span data-i18n="autoDl">Baixar automaticamente</span>
+        </label>
+      </div>
+      <p class="hint" data-i18n="tipMulti"></p>
+    </section>
+
+    <section id="jobs" class="jobs" aria-live="polite"></section>
+
+    <section class="panel">
+      <h2 data-i18n="platforms">Plataformas suportadas</h2>
+      <p class="legend">
+        <span><i class="dot native"></i><span data-i18n="legendNative"></span></span>
+        <span><i class="dot cobalt"></i><span data-i18n="legendCobalt"></span></span>
+        <span><i class="dot scan"></i><span data-i18n="legendScan"></span></span>
+      </p>
+      <ul id="platformList" class="chips"></ul>
+    </section>
+
+    <section class="panel how">
+      <h2 data-i18n="howTitle">Como funciona</h2>
+      <div class="steps">
+        <div class="step"><h3 data-i18n="how1t"></h3><p data-i18n="how1"></p></div>
+        <div class="step"><h3 data-i18n="how2t"></h3><p data-i18n="how2"></p></div>
+        <div class="step"><h3 data-i18n="how3t"></h3><p data-i18n="how3"></p></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p id="bookmarkletLine"></p>
+    <p class="legal" data-i18n="legal"></p>
+  </footer>
+  </div>
+
+  <div id="dropOverlay" class="drop-overlay" hidden><div data-i18n="dropHere">Solte o link aqui</div></div>
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <!-- Multi-item picker -->
+  <dialog id="picker" class="modal wide">
+    <div class="modal-inner">
+      <header class="modal-head">
+        <div>
+          <h2 id="pickerTitle"></h2>
+          <p id="pickerSub" class="muted" data-i18n="pickerSub"></p>
+        </div>
+        <button type="button" class="icon-btn" data-close data-i18n-title="close">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="picker-tools">
+        <button type="button" class="btn ghost sm" id="selAll" data-i18n="selectAll"></button>
+        <button type="button" class="btn ghost sm" id="selNone" data-i18n="selectNone"></button>
+        <span id="selCount" class="muted"></span>
+      </div>
+      <ul id="pickerGrid" class="grid"></ul>
+      <p id="pickerNote" class="note" hidden></p>
+      <footer class="modal-foot">
+        <button type="button" class="btn ghost" id="zipBtn" data-i18n="downloadZip"></button>
+        <button type="button" class="btn primary" id="dlSelBtn"></button>
+      </footer>
+    </div>
+  </dialog>
+
+  <!-- Player for files the source site won't let the page fetch -->
+  <dialog id="viewer" class="modal">
+    <div class="modal-inner">
+      <header class="modal-head">
+        <div>
+          <h2 data-i18n="viewerTitle"></h2>
+          <p id="viewerName" class="muted filename"></p>
+        </div>
+        <button type="button" class="icon-btn" data-close data-i18n-title="close">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div id="viewerMedia" class="viewer-media"></div>
+      <p class="note" data-i18n="viewerHelp"></p>
+      <footer class="modal-foot">
+        <a id="viewerOpen" class="btn primary" target="_blank" rel="noopener noreferrer" data-i18n="openNewTab"></a>
+      </footer>
+    </div>
+  </dialog>
+
+  <!-- Settings -->
+  <dialog id="settingsDlg" class="modal">
+    <form class="modal-inner" id="settingsForm" method="dialog">
+      <header class="modal-head">
+        <h2 data-i18n="settings">Configurações</h2>
+        <button type="button" class="icon-btn" data-close data-i18n-title="close">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="settings-body">
+        <div class="row2">
+          <label class="field"><span data-i18n="language"></span>
+            <select name="lang"></select>
+          </label>
+          <label class="field"><span data-i18n="audioFormat"></span>
+            <select name="audioFormat"><option value="mp3">MP3</option><option value="best">M4A (original)</option><option value="ogg">OGG</option><option value="opus">Opus</option><option value="wav">WAV</option></select>
+          </label>
+        </div>
+        <label class="toggle"><input type="checkbox" name="autoStart"><span class="track" aria-hidden="true"></span><span data-i18n="autoStart"></span></label>
+        <div class="field">
+          <label class="toggle"><input type="checkbox" name="useFfmpeg"><span class="track" aria-hidden="true"></span><span data-i18n="useFfmpeg"></span></label>
+          <small data-i18n="useFfmpegHelp"></small>
+        </div>
+        <label class="toggle" id="translateRow"><input type="checkbox" name="translateTitles"><span class="track" aria-hidden="true"></span><span data-i18n="translateTitles"></span></label>
+
+        <div class="field">
+          <label class="toggle"><input type="checkbox" name="publicCobalt"><span class="track" aria-hidden="true"></span><span data-i18n="publicCobalt"></span></label>
+          <small data-i18n="publicCobaltHelp"></small>
+        </div>
+        <label class="toggle"><input type="checkbox" name="loaderTo"><span class="track" aria-hidden="true"></span><span data-i18n="loaderSetting"></span></label>
+        <label class="field"><span data-i18n="cobaltTitle"></span>
+          <textarea name="cobalt" rows="2" spellcheck="false" placeholder="https://cobalt.example.com/ | API_KEY"></textarea>
+          <small data-i18n="cobaltHelp"></small>
+          <a class="guide-link" href="https://github.com/monolito123/projetotele/blob/ccr-7a4345da-w1un2r/server/README.md" target="_blank" rel="noopener" data-i18n="serverGuide"></a>
+        </label>
+        <label class="field"><span data-i18n="proxyTitle"></span>
+          <input name="corsProxy" type="text" spellcheck="false" placeholder="https://my-proxy.workers.dev/?url={url}">
+          <small data-i18n="proxyHelp"></small>
+        </label>
+        <details>
+          <summary>YouTube (Piped / Invidious)</summary>
+          <label class="field"><span data-i18n="pipedTitle"></span><textarea name="piped" rows="4" spellcheck="false"></textarea></label>
+          <label class="field"><span data-i18n="invTitle"></span><textarea name="invidious" rows="4" spellcheck="false"></textarea></label>
+        </details>
+      </div>
+      <footer class="modal-foot">
+        <button type="button" class="btn ghost" id="resetBtn" data-i18n="reset"></button>
+        <button type="submit" class="btn primary" data-i18n="save"></button>
+      </footer>
+    </form>
+  </dialog>
+</body>
+</html>
