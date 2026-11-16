@@ -59,7 +59,7 @@ Each link goes through a chain of resolvers. The first one that works wins. If n
 | **Reddit** | cobalt → public JSON + ffmpeg merge | ⚠️ the public JSON is blocked on some networks |
 | **Direct files** (`.mp4 .webm .mov .mp3 .jpg…`) | fetched directly | ✅ |
 | **HLS streams** (`.m3u8`) | built-in downloader: quality, AES-128, fMP4, separate audio | ✅ |
-| **YouTube** (videos, Shorts, playlists) | cobalt (free public servers, or yours) → Piped → Invidious | ✅ most videos; some (e.g. region-locked music videos) are blocked for the public servers |
+| **YouTube** (videos, Shorts, playlists) | cobalt (free public servers, or yours) → Piped → Invidious → loader.to button | ✅ automatic for most videos; the rest through the loader.to button (one tap, ads) |
 | **Instagram, Facebook, Vimeo, Dailymotion, Twitch clips, SoundCloud, Tumblr, Snapchat, Bilibili, Loom, Newgrounds, OK.ru, VK, Rutube, Medal, Xiaohongshu** | cobalt (free public servers, or yours) | ⚠️ best-effort on the public servers; reliable with your own |
 | **Threads, Telegram, Kick, Rumble, LinkedIn, Kwai, Coub, any other site** | page scan (og:video, `<video>`, JSON-LD, raw media URLs, embedded players) | 🔧 usually needs the CORS proxy |
 | Netflix, Prime Video, Disney+, Spotify… | refused (DRM) | ❌ |
@@ -67,6 +67,10 @@ Each link goes through a chain of resolvers. The first one that works wins. If n
 ### Free public servers (no setup)
 
 Out of the box, platforms that need a server (YouTube, Instagram, Facebook…) go through a small pool of **free community-run cobalt servers** that accept requests from any website. They're listed in `PUBLIC_COBALT` in [`js/settings.js`](js/settings.js) and can be switched off in ⚙ Settings. If one server fails (busy, blocked, or sends an empty file), the next one is tried automatically. These servers are run by volunteers. They can be slow, change, or be blocked by a platform for a given video. Your own server (below) is the reliable option.
+
+### When the free servers can't get a YouTube video: loader.to
+
+For YouTube videos the free servers can't fetch (e.g. region-locked music videos), the result card shows the **official embeddable button of [loader.to](https://loader.to/api/)**, an ad-supported download service that offers this embed API to other websites. It's preset to the chosen quality or audio format. The user taps it, waits a few seconds, and taps "Download Now!". loader.to may open one ad tab. It can be turned off in ⚙ Settings. Nothing is sent to loader.to unless that card appears.
 
 ### Your own server: getvid-server (yt-dlp)
 

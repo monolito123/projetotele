@@ -98,6 +98,7 @@ function createJob(url) {
     bar: h('div', { class: 'bar indet' }, h('i')),
     sub: h('ul', { class: 'sublist', hidden: true }),
     details: h('details', { hidden: true }, h('summary'), h('ul')),
+    alt: h('div', { class: 'alt', hidden: true }),
     actions: h('div', { class: 'actions' }),
     close: h('button', { class: 'close', type: 'button' }, '×'),
   };
@@ -106,7 +107,7 @@ function createJob(url) {
   ui.tr.addEventListener('click', () => toggleTitleTranslation(job));
   job.el = h('article', { class: 'job' },
     ui.thumb,
-    h('div', { class: 'body' }, h('div', { class: 'meta' }, ui.badge, ui.via, ui.tr), ui.title, ui.src, ui.status, ui.bar, ui.sub, ui.details, ui.actions),
+    h('div', { class: 'body' }, h('div', { class: 'meta' }, ui.badge, ui.via, ui.tr), ui.title, ui.src, ui.status, ui.bar, ui.sub, ui.details, ui.alt, ui.actions),
     ui.close);
   $('#jobs').prepend(job.el);
   jobs.set(id, job);
@@ -164,9 +165,61 @@ function paintTitle(job) {
   job.ui.tr.textContent = `🌐 ${tr && !job.showOriginal ? t('original') : t('translate')}`;
 }
 
+/* ---------------- loader.to: official embed for YouTube videos our servers can't get ---------------- */
+
+const LOADER_API = 'https://p.savenow.to/api/';
+
+function youtubeWatchUrl(u) {
+  const m = String(u).match(/(?:[?&]v=|youtu\.be\/|\/shorts\/|\/live\/|\/embed\/)([\w-]{11})/);
+  return m ? `https://www.youtube.com/watch?v=${m[1]}` : null;
+}
+
+/** Map the site's quality / audio settings to loader.to's `f` values. */
+function loaderFormat(s) {
+  if (s.mode === 'audio') return { mp3: 'mp3', best: 'm4a', ogg: 'ogg', opus: 'opus', wav: 'wav' }[s.audioFormat] || 'mp3';
+  return { max: '1080', 2160: '4k', 1440: '1080', 1080: '1080', 720: '720', 480: '480', 360: '360', 240: '360' }[s.quality] || '720';
+}
+
+function showLoader(job) {
+  const s = getSettings();
+  const watch = youtubeWatchUrl(job.url);
+  if (s.loaderTo === false || !watch) return;
+  const frame = h('iframe', {
+    class: 'alt-btn', title: 'loader.to', referrerpolicy: 'strict-origin-when-cross-origin',
+    src: `${LOADER_API}button/?url=${encodeURIComponent(watch)}&f=${loaderFormat(s)}&color=6b5cff&ads=1`,
+  });
+  const more = h('button', { type: 'button', class: 'linkish' });
+  more.addEventListener('click', () => {
+    frame.className = 'alt-card';
+    frame.src = `${LOADER_API}card/?url=${encodeURIComponent(watch)}&ads=1`;
+    more.hidden = true;
+  });
+  job.loader = { title: h('h4'), note: h('p'), more };
+  job.ui.alt.replaceChildren(job.loader.title, job.loader.note, frame, more);
+  job.ui.alt.hidden = false;
+  setStatus(job, [L('loaderStatus')], 'warn'); // the fix is right below: no alarming red text
+  paintLoader(job);
+}
+
+function paintLoader(job) {
+  if (!job.loader) return;
+  job.loader.title.textContent = t('loaderTitle');
+  job.loader.note.textContent = t('loaderNote');
+  job.loader.more.textContent = t('loaderMore');
+}
+
+function hideLoader(job) {
+  job.loader = null;
+  job.ui.alt.hidden = true;
+  job.ui.alt.replaceChildren();
+}
+
+const isYouTubeJob = (job, e) => (e?.platform || job.result?.platform)?.id === 'youtube';
+
 /** Re-render every string of a job in the current language. */
 function rerenderJob(job) {
   paintStatus(job);
+  paintLoader(job);
   job.ui.actions.replaceChildren(...job.actionsFn().filter(Boolean));
   paintRows(job);
   paintDetails(job);
@@ -267,6 +320,7 @@ async function runJob(job) {
   job.ctrl = new AbortController();
   const { signal } = job.ctrl;
   Object.assign(job, { manual: null, done: false, file: null, attempts: [], rows: [] });
+  hideLoader(job);
   job.ui.sub.hidden = true;
   paintDetails(job);
   setStatus(job, [L('statusDetecting')]);
@@ -307,6 +361,7 @@ function showError(job, e) {
   setStatus(job, [errText(e) || L('statusFailed')], 'err');
   job.attempts = e.attempts || [];
   paintDetails(job);
+  if (!e.fatal && isYouTubeJob(job, e)) showLoader(job);
   setActions(job, () => [
     e.needsCobalt ? btn(`⚙ ${t('settings')}`, openSettings, 'primary') : null,
     e.fatal ? null : btn(t('retry'), () => runJob(job), e.needsCobalt ? 'ghost' : 'primary'),
@@ -360,6 +415,7 @@ async function downloadSingle(job, item, variant) {
       setBar(job, 'hide');
       job.needsSettings = !!e.needsCobalt;
       setStatus(job, e.needsCobalt ? [errText(e)] : [L('statusFailed'), ': ', errText(e)], 'err');
+      if (isYouTubeJob(job)) showLoader(job);
     }
   }
   setActions(job, () => (job.result.items.length === 1 ? singleActions(job) : multiActions(job)));
@@ -634,6 +690,7 @@ function fillSettingsForm(s) {
   field('useFfmpeg').checked = s.useFfmpeg !== false;
   field('translateTitles').checked = s.translateTitles !== false;
   field('publicCobalt').checked = s.publicCobalt !== false;
+  field('loaderTo').checked = s.loaderTo !== false;
   field('cobalt').value = s.cobalt;
   field('corsProxy').value = s.corsProxy;
   field('piped').value = s.piped;
@@ -770,6 +827,7 @@ async function init() {
       useFfmpeg: field('useFfmpeg').checked,
       translateTitles: field('translateTitles').checked,
       publicCobalt: field('publicCobalt').checked,
+      loaderTo: field('loaderTo').checked,
       cobalt: field('cobalt').value.trim(),
       corsProxy: field('corsProxy').value.trim(),
       piped: field('piped').value.trim(),

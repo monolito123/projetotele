@@ -11,6 +11,7 @@ export const DEFAULTS = Object.freeze({
   useFfmpeg: true, // merge audio+video / remux / extract audio in the browser (ffmpeg.wasm)
   translateTitles: true, // on-device translation of post titles (Chrome Translator API)
   publicCobalt: true, // fall back to the free community cobalt servers below
+  loaderTo: true, // offer loader.to's official embed (external, with ads) when YouTube fails
   // "https://your-cobalt.example.com/" or "https://your-cobalt.example.com/ | API_KEY"
   cobalt: '',
   piped: [
